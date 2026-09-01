@@ -1,5 +1,5 @@
 // app.js — STL Vault file manager: libraries, tree, grid, list view, breadcrumbs,
-// Finder/Explorer drag & drop, slicer integration, 3MF metadata, import from link, context menus, uploads.
+// Finder/Explorer drag & drop, slicer integration, 3MF metadata, import from link, batch selection.
 
 import { attachHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
 
@@ -14,7 +14,7 @@ const state = {
   sortCol: "name", // 'name', 'kind', 'size', 'mtime'
   sortAsc: true,
   slicer: localStorage.getItem("stl_vault_slicer") || "orcaslicer",
-  selectedItem: null,
+  selectedPaths: new Set(),
 };
 
 const contentEl = document.getElementById("content");
@@ -25,6 +25,8 @@ const ctxMenuEl = document.getElementById("ctxMenu");
 const viewGridBtn = document.getElementById("viewGridBtn");
 const viewListBtn = document.getElementById("viewListBtn");
 const slicerSelect = document.getElementById("slicerSelect");
+const batchBar = document.getElementById("batchBar");
+const batchCount = document.getElementById("batchCount");
 
 // IntersectionObserver for Lazy Loading Thumbnails
 const thumbObserver = new IntersectionObserver(
@@ -83,6 +85,49 @@ function fmtDate(mtime) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) +
          " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
+
+/* ------------------------------------------------------------- batch bar */
+
+function updateBatchBar() {
+  const sz = state.selectedPaths.size;
+  if (sz > 0) {
+    batchCount.textContent = `${sz} item${sz > 1 ? "s" : ""} selected`;
+    batchBar.classList.add("show");
+  } else {
+    batchBar.classList.remove("show");
+  }
+}
+
+document.getElementById("batchClearBtn").addEventListener("click", () => {
+  state.selectedPaths.clear();
+  updateBatchBar();
+  renderContent();
+});
+
+document.getElementById("batchDelBtn").addEventListener("click", async () => {
+  const sz = state.selectedPaths.size;
+  if (!sz) return;
+  if (!confirm(`Move ${sz} selected item(s) to trash?`)) return;
+  for (const path of state.selectedPaths) {
+    try { await api.del(state.activeLib, path); } catch {}
+  }
+  state.selectedPaths.clear();
+  updateBatchBar();
+  refresh();
+});
+
+document.getElementById("batchMoveBtn").addEventListener("click", async () => {
+  const sz = state.selectedPaths.size;
+  if (!sz) return;
+  const targetName = prompt("Target folder path relative to library (or leave empty for library root):");
+  if (targetName === null) return;
+  for (const path of state.selectedPaths) {
+    try { await api.move(state.activeLib, path, state.activeLib, targetName); } catch {}
+  }
+  state.selectedPaths.clear();
+  updateBatchBar();
+  refresh();
+});
 
 /* ------------------------------------------------------------- slicer bridge */
 
@@ -164,18 +209,19 @@ async function refresh() {
   renderCrumbs();
   renderViewToggle();
   renderContent();
+  updateBatchBar();
 }
 
 function navigate(path) {
   state.path = path;
-  state.selectedItem = null;
+  state.selectedPaths.clear();
   refresh().catch((e) => alert(e.message));
 }
 
 function switchLibrary(libId) {
   state.activeLib = libId;
   state.path = "";
-  state.selectedItem = null;
+  state.selectedPaths.clear();
   refresh().catch((e) => alert(e.message));
 }
 
@@ -380,16 +426,29 @@ function cardActions(entry, isFolder) {
 /* ------------------------------------------------------------- icon grid */
 
 function renderFolderCard(folder) {
+  const isSelected = state.selectedPaths.has(folder.path);
   const el = document.createElement("div");
-  el.className = "card" + (state.selectedItem?.path === folder.path ? " selected" : "");
-  el.innerHTML = `<div class="thumb"><span class="big-ico">📁</span></div>
+  el.className = "card" + (isSelected ? " selected" : "");
+
+  const chk = document.createElement("div");
+  chk.className = "chk-box";
+  chk.innerHTML = isSelected ? "✓" : "";
+  chk.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSelection(folder.path);
+  });
+  el.appendChild(chk);
+
+  el.insertAdjacentHTML("beforeend", `<div class="thumb"><span class="big-ico">📁</span></div>
     <div class="cname" title="${folder.name}">${folder.name}</div>
-    <div class="cmeta">folder</div>`;
+    <div class="cmeta">folder</div>`);
   el.appendChild(cardActions(folder, true));
 
   el.addEventListener("click", (e) => {
-    e.stopPropagation();
-    selectItem(folder, el);
+    if (e.metaKey || e.ctrlKey) {
+      e.stopPropagation();
+      toggleSelection(folder.path);
+    }
   });
   el.addEventListener("dblclick", () => navigate(folder.path));
 
@@ -400,8 +459,19 @@ function renderFolderCard(folder) {
 }
 
 function renderModelCard(file) {
+  const isSelected = state.selectedPaths.has(file.path);
   const el = document.createElement("div");
-  el.className = "card" + (state.selectedItem?.path === file.path ? " selected" : "");
+  el.className = "card" + (isSelected ? " selected" : "");
+
+  const chk = document.createElement("div");
+  chk.className = "chk-box";
+  chk.innerHTML = isSelected ? "✓" : "";
+  chk.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSelection(file.path);
+  });
+  el.appendChild(chk);
+
   const thumb = document.createElement("div");
   thumb.className = "thumb";
   el.appendChild(thumb);
@@ -425,8 +495,10 @@ function renderModelCard(file) {
   el.appendChild(cardActions(file, false));
 
   el.addEventListener("click", (e) => {
-    e.stopPropagation();
-    selectItem(file, el);
+    if (e.metaKey || e.ctrlKey) {
+      e.stopPropagation();
+      toggleSelection(file.path);
+    }
   });
   el.addEventListener("dblclick", () => openModalViewer(file, state.activeLib));
 
@@ -479,8 +551,9 @@ function renderListView(folders, files) {
   const tbody = document.createElement("tbody");
 
   folders.forEach((folder) => {
+    const isSelected = state.selectedPaths.has(folder.path);
     const tr = document.createElement("tr");
-    tr.className = "list-row" + (state.selectedItem?.path === folder.path ? " selected" : "");
+    tr.className = "list-row" + (isSelected ? " selected" : "");
     tr.innerHTML = `
       <td class="name-col">
         <div class="row-ico"><span>📁</span></div>
@@ -496,8 +569,10 @@ function renderListView(folders, files) {
     tr.querySelector(".row-actions").appendChild(cardActions(folder, true));
 
     tr.addEventListener("click", (e) => {
-      e.stopPropagation();
-      selectItem(folder, tr);
+      if (e.metaKey || e.ctrlKey) {
+        e.stopPropagation();
+        toggleSelection(folder.path);
+      }
     });
     tr.addEventListener("dblclick", () => navigate(folder.path));
 
@@ -508,8 +583,9 @@ function renderListView(folders, files) {
   });
 
   files.forEach((file) => {
+    const isSelected = state.selectedPaths.has(file.path);
     const tr = document.createElement("tr");
-    tr.className = "list-row" + (state.selectedItem?.path === file.path ? " selected" : "");
+    tr.className = "list-row" + (isSelected ? " selected" : "");
     let kindLabel = file.kind === "3mf" ? "3MF Model" : "STL Model";
     if (file.slicerMeta && file.slicerMeta.printerModel) {
       kindLabel += ` (${file.slicerMeta.printerModel})`;
@@ -534,8 +610,10 @@ function renderListView(folders, files) {
     tr.querySelector(".row-actions").appendChild(cardActions(file, false));
 
     tr.addEventListener("click", (e) => {
-      e.stopPropagation();
-      selectItem(file, tr);
+      if (e.metaKey || e.ctrlKey) {
+        e.stopPropagation();
+        toggleSelection(file.path);
+      }
     });
     tr.addEventListener("dblclick", () => openModalViewer(file, state.activeLib));
 
@@ -601,10 +679,11 @@ function fillThumbNow(host, file) {
   pumpThumbQueue();
 }
 
-function selectItem(item, el) {
-  document.querySelectorAll(".card.selected, .list-row.selected").forEach((e) => e.classList.remove("selected"));
-  state.selectedItem = item;
-  el.classList.add("selected");
+function toggleSelection(itemPath) {
+  if (state.selectedPaths.has(itemPath)) state.selectedPaths.delete(itemPath);
+  else state.selectedPaths.add(itemPath);
+  updateBatchBar();
+  renderContent();
 }
 
 /* ------------------------------------------------------------- drag & drop */
@@ -612,9 +691,12 @@ function selectItem(item, el) {
 function makeDraggable(el, item, isFolder) {
   el.draggable = true;
   el.addEventListener("dragstart", (e) => {
+    const movePaths = state.selectedPaths.has(item.path)
+      ? [...state.selectedPaths]
+      : [item.path];
     e.dataTransfer.setData(
       "application/x-stl-item",
-      JSON.stringify({ lib: state.activeLib, path: item.path, name: item.name, isFolder })
+      JSON.stringify({ lib: state.activeLib, paths: movePaths, isFolder })
     );
     el.classList.add("dragging");
   });
@@ -637,13 +719,17 @@ function makeDropTarget(el, targetLibId, targetFolderPath) {
     const raw = e.dataTransfer.getData("application/x-stl-item");
     if (!raw) return;
     const item = JSON.parse(raw);
-    if (item.lib === targetLibId && item.path === targetFolderPath) return;
-    try {
-      await api.move(item.lib, item.path, targetLibId, targetFolderPath);
-      refresh();
-    } catch (err) {
-      alert(err.message);
+    const paths = item.paths || (item.path ? [item.path] : []);
+    for (const p of paths) {
+      if (item.lib === targetLibId && p === targetFolderPath) continue;
+      try {
+        await api.move(item.lib || state.activeLib, p, targetLibId, targetFolderPath);
+      } catch (err) {
+        alert(err.message);
+      }
     }
+    state.selectedPaths.clear();
+    refresh();
   });
 }
 

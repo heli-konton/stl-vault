@@ -104,6 +104,14 @@ button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:
 .card.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.3);background:rgba(var(--accent-rgb),.08)}
 .card.drop-target{border-color:var(--teal);background:rgba(53,224,208,.1);box-shadow:0 0 0 3px rgba(53,224,208,.2)}
 .card.dragging{opacity:.35}
+.card .chk-box{
+  position:absolute;top:6px;left:6px;width:18px;height:18px;border-radius:5px;
+  border:1px solid var(--hairline);background:rgba(8,12,17,.8);display:none;
+  align-items:center;justify-content:center;font-size:10px;color:var(--accent);cursor:pointer;
+}
+.card:hover .chk-box, .card.selected .chk-box{display:flex}
+.card.selected .chk-box{background:var(--accent);color:#000;border-color:var(--accent)}
+
 .card .thumb{
   width:120px;height:120px;border-radius:10px;display:flex;align-items:center;justify-content:center;
   background:radial-gradient(80px 60px at 50% 40%, rgba(var(--accent-rgb),.07), transparent 70%), #0a0e14;
@@ -172,6 +180,18 @@ button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:
   padding:60px 20px;text-align:center;color:var(--ink-faint);
   font-family:var(--mono);font-size:11px;letter-spacing:.1em;line-height:2;
 }
+
+/* ---------- floating batch bar ---------- */
+.batch-bar{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(100px);
+  z-index:200;display:flex;align-items:center;gap:12px;
+  background:rgba(19,25,32,.96);border:1px solid var(--accent);
+  border-radius:999px;padding:8px 18px;box-shadow:0 16px 50px rgba(0,0,0,.8);
+  transition:transform .22s cubic-bezier(.34,1.56,.64,1);
+  font-family:var(--mono);font-size:11px;
+}
+.batch-bar.show{transform:translateX(-50%) translateY(0)}
+.batch-count{color:var(--accent);font-weight:600}
 
 /* ---------- context menu ---------- */
 .ctx-menu{
@@ -286,6 +306,13 @@ button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:
     <div id="tree"></div>
   </div>
   <div class="content" id="content"></div>
+</div>
+
+<div class="batch-bar" id="batchBar">
+  <span class="batch-count" id="batchCount">0 items selected</span>
+  <button class="tbtn" id="batchMoveBtn">🚚 Move Selected</button>
+  <button class="tbtn del" id="batchDelBtn" style="color:var(--fail);border-color:var(--fail)">🗑 Delete Selected</button>
+  <button class="tbtn mini" id="batchClearBtn">✕ Clear</button>
 </div>
 
 <div class="popview" id="popview">
