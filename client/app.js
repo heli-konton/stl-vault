@@ -1,5 +1,5 @@
 // app.js — STL Vault file manager: libraries, tree, grid, list view, breadcrumbs,
-// Finder/Explorer drag & drop, slicer integration, 3MF metadata, context menus, uploads.
+// Finder/Explorer drag & drop, slicer integration, 3MF metadata, import from link, context menus, uploads.
 
 import { attachHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
 
@@ -132,6 +132,18 @@ if (slicerSelect) {
     renderContent();
   });
 }
+
+document.getElementById("importLinkBtn").addEventListener("click", async () => {
+  const url = prompt("Paste model link (MakerWorld, Printables, or Thingiverse):");
+  if (!url) return;
+  try {
+    const res = await post("/api/import-link", { url, lib: state.activeLib, path: state.path });
+    alert(`Imported ${res.count || 0} model file(s) into folder “${res.folder}”!`);
+    refresh();
+  } catch (err) {
+    alert(`Import failed: ${err.message}`);
+  }
+});
 
 /* ------------------------------------------------------------------ boot */
 

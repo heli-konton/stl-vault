@@ -76,7 +76,6 @@ function inspect3MF(abs, tp) {
     const zip = new AdmZip(abs);
     const entries = zip.getEntries();
 
-    // 1. Extract embedded PNG thumbnail if not already present
     if (!hasThumb(tp)) {
       let thumbEntry = entries.find((e) =>
         e.entryName.startsWith("Auxiliaries/.thumbnails/") ||
@@ -91,7 +90,6 @@ function inspect3MF(abs, tp) {
       }
     }
 
-    // 2. Parse 3MF slicer config
     const configEntry = entries.find((e) =>
       e.entryName === "Metadata/project_settings.config" ||
       e.entryName === "Metadata/slice_info.config"
@@ -250,6 +248,66 @@ app.post("/api/thumb", (req, res) => {
   const st = fs.statSync(info.abs);
   fs.writeFileSync(thumbPath(info.root, info.rel, st.size, st.mtimeMs), Buffer.from(m[1], "base64"));
   res.json({ ok: true });
+});
+
+// -- Import from Link API ----------------------------------------------------
+
+app.post("/api/import-link", async (req, res) => {
+  const info = safeRel(req.body.path || "", req.body.lib);
+  const inputUrl = String(req.body.url || "").trim();
+  if (!info || !inputUrl) return res.status(400).json({ error: "URL required" });
+
+  let downloadUrl = "";
+  let folderName = "";
+
+  if (inputUrl.includes("thingiverse.com/thing:")) {
+    const thingId = inputUrl.split("thing:")[1].split("/")[0].split("?")[0];
+    folderName = `Thingiverse_Thing_${thingId}`;
+    downloadUrl = `https://www.thingiverse.com/thing:${thingId}/zip`;
+  } else if (inputUrl.includes("printables.com/model/")) {
+    const modelId = inputUrl.split("model/")[1].split("-")[0].split("/")[0];
+    folderName = `Printables_Model_${modelId}`;
+    downloadUrl = `https://www.printables.com/model/${modelId}/download`;
+  } else if (inputUrl.includes("makerworld.com")) {
+    const parts = inputUrl.split("/models/");
+    const modelId = parts[1] ? parts[1].split("#")[0].split("?")[0].split("/")[0] : "model";
+    folderName = `MakerWorld_Model_${modelId}`;
+    downloadUrl = inputUrl;
+  } else {
+    folderName = `Import_${Date.now()}`;
+    downloadUrl = inputUrl;
+  }
+
+  const targetFolder = path.join(info.abs, folderName);
+  fs.mkdirSync(targetFolder, { recursive: true });
+
+  try {
+    const response = await fetch(downloadUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status} from model site`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    let importedCount = 0;
+    if (downloadUrl.endsWith(".zip") || buffer.slice(0, 4).toString("hex") === "504b0304") {
+      const zip = new AdmZip(buffer);
+      for (const entry of zip.getEntries()) {
+        if (!entry.isDirectory && is3DFile(entry.entryName)) {
+          const fileName = path.basename(entry.entryName).replace(/[^\w.\- ]+/g, "_");
+          fs.writeFileSync(path.join(targetFolder, fileName), entry.getData());
+          importedCount++;
+        }
+      }
+    } else {
+      const fileName = `${folderName}.3mf`;
+      fs.writeFileSync(path.join(targetFolder, fileName), buffer);
+      importedCount = 1;
+    }
+
+    res.json({ ok: true, folder: folderName, count: importedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const upload = multer({
