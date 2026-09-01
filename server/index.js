@@ -7,6 +7,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const AdmZip = require("adm-zip");
 
 const PORT = process.env.PORT || 4173;
 const LIBRARIES_FILE = path.join(__dirname, "..", "libraries.json");
@@ -69,11 +70,59 @@ function thumbPath(root, rel, size, mtime) {
   return path.join(root, ".thumbs", `${key}.png`);
 }
 
+function inspect3MF(abs, tp) {
+  let slicerMeta = null;
+  try {
+    const zip = new AdmZip(abs);
+    const entries = zip.getEntries();
+
+    // 1. Extract embedded PNG thumbnail if not already present
+    if (!hasThumb(tp)) {
+      let thumbEntry = entries.find((e) =>
+        e.entryName.startsWith("Auxiliaries/.thumbnails/") ||
+        e.entryName.startsWith("Metadata/plate_") ||
+        e.entryName === "Metadata/thumbnail.png"
+      );
+      if (!thumbEntry) {
+        thumbEntry = entries.find((e) => e.entryName.endsWith(".png") || e.entryName.endsWith(".jpg"));
+      }
+      if (thumbEntry) {
+        fs.writeFileSync(tp, thumbEntry.getData());
+      }
+    }
+
+    // 2. Parse 3MF slicer config
+    const configEntry = entries.find((e) =>
+      e.entryName === "Metadata/project_settings.config" ||
+      e.entryName === "Metadata/slice_info.config"
+    );
+    if (configEntry) {
+      const text = configEntry.getData().toString("utf8");
+      if (text.startsWith("{")) {
+        const json = JSON.parse(text);
+        slicerMeta = {
+          layerHeight: json.layer_height ? parseFloat(json.layer_height) : null,
+          nozzle: Array.isArray(json.nozzle_diameter) ? json.nozzle_diameter[0] : json.nozzle_diameter,
+          filamentType: Array.isArray(json.filament_type) ? [...new Set(json.filament_type)].join("/") : json.filament_type,
+          printerModel: json.printer_model || null,
+        };
+      }
+    }
+  } catch { /* skip corrupted 3mf inspection */ }
+  return slicerMeta;
+}
+
 function fileEntry(abs, root) {
   const st = fs.statSync(abs);
   const rel = path.relative(root, abs).split(path.sep).join("/");
   const tp = thumbPath(root, rel, st.size, st.mtimeMs);
   const ext = path.extname(abs).toLowerCase().replace(".", "");
+
+  let slicerMeta = null;
+  if (ext === "3mf") {
+    slicerMeta = inspect3MF(abs, tp);
+  }
+
   return {
     kind: ext === "3mf" ? "3mf" : "stl",
     name: path.basename(abs),
@@ -81,6 +130,7 @@ function fileEntry(abs, root) {
     size: st.size,
     mtime: st.mtimeMs,
     thumb: hasThumb(tp),
+    slicerMeta,
   };
 }
 

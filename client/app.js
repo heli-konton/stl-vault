@@ -1,5 +1,5 @@
 // app.js — STL Vault file manager: libraries, tree, grid, list view, breadcrumbs,
-// Finder/Explorer drag & drop, slicer integration, context menus, uploads, folder/file operations.
+// Finder/Explorer drag & drop, slicer integration, 3MF metadata, context menus, uploads.
 
 import { attachHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
 
@@ -394,9 +394,21 @@ function renderModelCard(file) {
   thumb.className = "thumb";
   el.appendChild(thumb);
   const badge = file.kind === "3mf" ? " <span style='color:var(--teal)'>[3MF]</span>" : "";
+
+  let slicerBadge = "";
+  if (file.slicerMeta) {
+    const parts = [];
+    if (file.slicerMeta.printerModel) parts.push(file.slicerMeta.printerModel);
+    if (file.slicerMeta.nozzle) parts.push(`${file.slicerMeta.nozzle}mm`);
+    if (file.slicerMeta.filamentType) parts.push(file.slicerMeta.filamentType);
+    if (parts.length) {
+      slicerBadge = `<div style="font-family:var(--mono);font-size:8px;color:var(--teal);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px" title="${parts.join(' · ')}">🖨 ${parts.join(' · ')}</div>`;
+    }
+  }
+
   el.insertAdjacentHTML(
     "beforeend",
-    `<div class="cname" title="${file.name}">${file.name}</div><div class="cmeta">${fmtSize(file.size)}${badge}</div>`
+    `<div class="cname" title="${file.name}">${file.name}</div><div class="cmeta">${fmtSize(file.size)}${badge}</div>${slicerBadge}`
   );
   el.appendChild(cardActions(file, false));
 
@@ -486,7 +498,10 @@ function renderListView(folders, files) {
   files.forEach((file) => {
     const tr = document.createElement("tr");
     tr.className = "list-row" + (state.selectedItem?.path === file.path ? " selected" : "");
-    const kindLabel = file.kind === "3mf" ? "3MF Model" : "STL Model";
+    let kindLabel = file.kind === "3mf" ? "3MF Model" : "STL Model";
+    if (file.slicerMeta && file.slicerMeta.printerModel) {
+      kindLabel += ` (${file.slicerMeta.printerModel})`;
+    }
     const icoBox = document.createElement("div");
     icoBox.className = "row-ico";
 
