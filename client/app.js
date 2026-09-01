@@ -2,6 +2,7 @@
 // Finder/Explorer drag & drop, slicer integration, 3MF metadata, import from link, batch selection.
 
 import { attachHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
+import { ICON } from "./icons.js";
 
 const state = {
   activeLib: "default",
@@ -91,7 +92,7 @@ function fmtDate(mtime) {
 function updateBatchBar() {
   const sz = state.selectedPaths.size;
   if (sz > 0) {
-    batchCount.textContent = `${sz} item${sz > 1 ? "s" : ""} selected`;
+    batchCount.innerHTML = `<b>${sz}</b> item${sz > 1 ? "s" : ""} selected`;
     batchBar.classList.add("show");
   } else {
     batchBar.classList.remove("show");
@@ -256,7 +257,7 @@ function renderLibraries() {
   state.libraries.forEach((lib) => {
     const btn = document.createElement("button");
     btn.className = "lib-item" + (lib.id === state.activeLib ? " active" : "");
-    btn.innerHTML = `<span>📚 ${lib.name}</span>`;
+    btn.innerHTML = `<span>${ICON.archive()}${lib.name}</span>`;
     btn.addEventListener("click", () => switchLibrary(lib.id));
     makeDropTarget(btn, lib.id, "");
     libListEl.appendChild(btn);
@@ -288,7 +289,7 @@ function renderTreeNode(node, isRoot = false) {
   const wrap = document.createElement("div");
   const btn = document.createElement("button");
   btn.className = "tree-item" + (node.path === state.path || (isRoot && state.path === "") ? " current" : "");
-  btn.innerHTML = `<span class="tw">${node.children?.length ? "▸" : ""}</span><span>${isRoot ? "🗄" : "📁"}</span><span>${isRoot ? (getCurLib()?.name || "Library") : node.name}</span>`;
+  btn.innerHTML = `<span class="tw">${node.children?.length ? ICON.chevron(9) : ""}</span><span>${isRoot ? ICON.archive() : ICON.folder()}</span><span>${isRoot ? (getCurLib()?.name || "Library") : node.name}</span>`;
   btn.addEventListener("click", () => {
     const kids = wrap.querySelector(".tree-kids");
     if (kids && node.path === state.path) kids.classList.toggle("open");
@@ -320,7 +321,7 @@ function renderCrumbs() {
   const parts = state.path ? state.path.split("/") : [];
   const curLib = getCurLib();
   const rootBtn = document.createElement("button");
-  rootBtn.innerHTML = `<span>🗄</span><span>${curLib ? curLib.name : "Library"}</span>`;
+  rootBtn.innerHTML = `<span>${ICON.archive(13)}</span><span>${curLib ? curLib.name : "Library"}</span>`;
   rootBtn.addEventListener("click", () => navigate(""));
   makeDropTarget(rootBtn, state.activeLib, "");
   crumbsEl.appendChild(rootBtn);
@@ -388,7 +389,7 @@ function cardActions(entry, isFolder) {
   if (!isFolder) {
     const sliceBtn = document.createElement("button");
     sliceBtn.className = "slice-btn";
-    sliceBtn.textContent = "🍰";
+    sliceBtn.innerHTML = ICON.layers(12);
     sliceBtn.title = `Open in ${getSlicerName(state.slicer)}`;
     sliceBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -398,7 +399,7 @@ function cardActions(entry, isFolder) {
   }
 
   const rn = document.createElement("button");
-  rn.textContent = "✏️";
+  rn.innerHTML = ICON.pencil(12);
   rn.title = "rename";
   rn.addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -410,7 +411,7 @@ function cardActions(entry, isFolder) {
 
   const del = document.createElement("button");
   del.className = "del";
-  del.textContent = "🗑";
+  del.innerHTML = ICON.trash(12);
   del.title = "move to trash";
   del.addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -428,18 +429,18 @@ function cardActions(entry, isFolder) {
 function renderFolderCard(folder) {
   const isSelected = state.selectedPaths.has(folder.path);
   const el = document.createElement("div");
-  el.className = "card" + (isSelected ? " selected" : "");
+  el.className = "card folder-card" + (isSelected ? " selected" : "");
 
   const chk = document.createElement("div");
   chk.className = "chk-box";
-  chk.innerHTML = isSelected ? "✓" : "";
+  chk.innerHTML = isSelected ? ICON.check(11) : "";
   chk.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleSelection(folder.path);
   });
   el.appendChild(chk);
 
-  el.insertAdjacentHTML("beforeend", `<div class="thumb"><span class="big-ico">📁</span></div>
+  el.insertAdjacentHTML("beforeend", `<div class="thumb"><span class="big-ico">${ICON.folder(46)}</span></div>
     <div class="cname" title="${folder.name}">${folder.name}</div>
     <div class="cmeta">folder</div>`);
   el.appendChild(cardActions(folder, true));
@@ -465,7 +466,7 @@ function renderModelCard(file) {
 
   const chk = document.createElement("div");
   chk.className = "chk-box";
-  chk.innerHTML = isSelected ? "✓" : "";
+  chk.innerHTML = isSelected ? ICON.check(11) : "";
   chk.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleSelection(file.path);
@@ -484,7 +485,7 @@ function renderModelCard(file) {
     if (file.slicerMeta.nozzle) parts.push(`${file.slicerMeta.nozzle}mm`);
     if (file.slicerMeta.filamentType) parts.push(file.slicerMeta.filamentType);
     if (parts.length) {
-      slicerBadge = `<div style="font-family:var(--mono);font-size:8px;color:var(--teal);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px" title="${parts.join(' · ')}">🖨 ${parts.join(' · ')}</div>`;
+      slicerBadge = `<div style="font-family:var(--sans);font-size:11px;color:var(--teal);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px" title="${parts.join(' · ')}">${parts.join(' · ')}</div>`;
     }
   }
 
@@ -556,7 +557,7 @@ function renderListView(folders, files) {
     tr.className = "list-row" + (isSelected ? " selected" : "");
     tr.innerHTML = `
       <td class="name-col">
-        <div class="row-ico"><span>📁</span></div>
+        <div class="row-ico">${ICON.folder(15)}</div>
         <span title="${folder.name}">${folder.name}</span>
       </td>
       <td>Folder</td>
@@ -639,12 +640,12 @@ function fillRowThumbNow(host, file) {
     img.alt = file.name;
     img.onerror = () => {
       file.thumb = false;
-      host.innerHTML = "<span>📄</span>";
+      host.innerHTML = ICON.file(15);
     };
     host.appendChild(img);
     return;
   }
-  host.innerHTML = "<span>📄</span>";
+  host.innerHTML = ICON.file(15);
 }
 
 function fillThumbNow(host, file) {
@@ -666,7 +667,7 @@ function fillThumbNow(host, file) {
     badge.className = "rendering";
     badge.style.animation = "none";
     badge.style.color = "var(--ink-dim)";
-    badge.textContent = file.kind === "3mf" ? "📦 [3MF]" : "📦 [STL]";
+    badge.innerHTML = ICON.cube(62);
     host.appendChild(badge);
     return;
   }
@@ -891,15 +892,14 @@ function showContextMenu(x, y, entry, isFolder) {
   ctxMenuEl.innerHTML = "";
 
   const title = document.createElement("div");
-  title.style.cssText =
-    "padding:4px 8px;font-weight:600;color:var(--accent);font-size:10px;border-bottom:1px solid var(--hairline);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-  title.textContent = `${isFolder ? "📁" : "📄"} ${entry.name}`;
+  title.className = "ctx-title";
+  title.innerHTML = `${isFolder ? ICON.folder(13) : ICON.cube(13)} <span>${entry.name}</span>`;
   ctxMenuEl.appendChild(title);
 
   if (!isFolder) {
     const openSlicerItem = document.createElement("div");
     openSlicerItem.className = "ctx-item";
-    openSlicerItem.innerHTML = `<span>🍰 Open in ${getSlicerName(state.slicer)}</span>`;
+    openSlicerItem.innerHTML = `${ICON.layers(13)} <span>Open in ${getSlicerName(state.slicer)}</span>`;
     openSlicerItem.addEventListener("click", () => {
       hideContextMenu();
       openInSlicer(entry, state.activeLib);
@@ -909,7 +909,7 @@ function showContextMenu(x, y, entry, isFolder) {
 
   const renameItem = document.createElement("div");
   renameItem.className = "ctx-item";
-  renameItem.innerHTML = `<span>✏️ Rename</span>`;
+  renameItem.innerHTML = `${ICON.pencil(13)} <span>Rename</span>`;
   renameItem.addEventListener("click", async () => {
     hideContextMenu();
     const name = prompt(`Rename “${entry.name}” to:`, entry.name);
@@ -924,13 +924,13 @@ function showContextMenu(x, y, entry, isFolder) {
 
   const otherLibs = state.libraries.filter((l) => l.id !== state.activeLib);
   if (otherLibs.length > 0) {
-    moveLibItem.innerHTML = `<span>🚚 Move to Library</span><span>▸</span>`;
+    moveLibItem.innerHTML = `${ICON.move(13)} <span>Move to Library</span><span>${ICON.chevron(11)}</span>`;
     const subMenu = document.createElement("div");
     subMenu.className = "ctx-sub";
     otherLibs.forEach((lib) => {
       const targetLibItem = document.createElement("div");
       targetLibItem.className = "ctx-item";
-      targetLibItem.innerHTML = `<span>📚 ${lib.name}</span>`;
+      targetLibItem.innerHTML = `${ICON.archive(13)} <span>${lib.name}</span>`;
       targetLibItem.addEventListener("click", async (e) => {
         e.stopPropagation();
         hideContextMenu();
@@ -945,14 +945,14 @@ function showContextMenu(x, y, entry, isFolder) {
     });
     moveLibItem.appendChild(subMenu);
   } else {
-    moveLibItem.innerHTML = `<span style="color:var(--ink-faint)">🚚 Move to Library (none)</span>`;
+    moveLibItem.innerHTML = `${ICON.move(13)} <span style="color:var(--ink-faint)">Move to Library (none)</span>`;
     moveLibItem.style.cursor = "default";
   }
   ctxMenuEl.appendChild(moveLibItem);
 
   const delItem = document.createElement("div");
   delItem.className = "ctx-item del";
-  delItem.innerHTML = `<span>🗑 Move to Trash</span>`;
+  delItem.innerHTML = `${ICON.trash(13)} <span>Move to Trash</span>`;
   delItem.addEventListener("click", async () => {
     hideContextMenu();
     if (!confirm(`Move “${entry.name}” to trash?`)) return;
@@ -991,7 +991,7 @@ async function pumpThumbQueue() {
     img.src = png;
     img.alt = job.file.name;
     img.onerror = () => {
-      job.host.innerHTML = `<div class="rendering" style="color:var(--fail)">⚠️ image error</div>`;
+      job.host.innerHTML = `<div class="rendering" style="color:var(--fail)">${ICON.warn(13)} image error</div>`;
     };
     job.shimmer.remove();
     job.host.appendChild(img);
@@ -1000,7 +1000,7 @@ async function pumpThumbQueue() {
     if (job.shimmer) {
       job.shimmer.style.animation = "none";
       job.shimmer.style.color = "var(--ink-faint)";
-      job.shimmer.textContent = job.file.kind === "3mf" ? "📦 [3MF]" : "📦 [STL]";
+      job.shimmer.innerHTML = ICON.cube(62);
     }
   } finally {
     thumbActive -= 1;
