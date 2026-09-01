@@ -1,5 +1,5 @@
 // app.js — STL Vault file manager: libraries, tree, grid, list view, breadcrumbs,
-// Finder/Explorer drag & drop, context menus, uploads, folder/file operations.
+// Finder/Explorer drag & drop, slicer integration, context menus, uploads, folder/file operations.
 
 import { attachHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
 
@@ -13,6 +13,7 @@ const state = {
   viewMode: localStorage.getItem("stl_vault_view_mode") || "grid", // 'grid' or 'list'
   sortCol: "name", // 'name', 'kind', 'size', 'mtime'
   sortAsc: true,
+  slicer: localStorage.getItem("stl_vault_slicer") || "orcaslicer",
   selectedItem: null,
 };
 
@@ -23,6 +24,7 @@ const crumbsEl = document.getElementById("crumbs");
 const ctxMenuEl = document.getElementById("ctxMenu");
 const viewGridBtn = document.getElementById("viewGridBtn");
 const viewListBtn = document.getElementById("viewListBtn");
+const slicerSelect = document.getElementById("slicerSelect");
 
 // IntersectionObserver for Lazy Loading Thumbnails
 const thumbObserver = new IntersectionObserver(
@@ -80,6 +82,55 @@ function fmtDate(mtime) {
   const d = new Date(mtime);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) +
          " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/* ------------------------------------------------------------- slicer bridge */
+
+function getSlicerName(key) {
+  const names = {
+    orcaslicer: "OrcaSlicer",
+    anycubic: "Anycubic Next",
+    elegoo: "Elegoo Slicer",
+    prusaslicer: "PrusaSlicer",
+    bambustudio: "Bambu Studio",
+  };
+  return names[key] || "Slicer";
+}
+
+function openInSlicer(file, libId = state.activeLib) {
+  const fileUrl = `${window.location.protocol}//${window.location.host}/api/file?path=${encodeURIComponent(file.path)}&lib=${encodeURIComponent(libId)}`;
+  let uri = "";
+  switch (state.slicer) {
+    case "orcaslicer":
+      uri = `orcaslicer://open?file=${encodeURIComponent(fileUrl)}`;
+      break;
+    case "anycubic":
+      uri = `anycubicslicernext://open?file=${encodeURIComponent(fileUrl)}`;
+      break;
+    case "elegoo":
+      uri = `elegooslicer://open?file=${encodeURIComponent(fileUrl)}`;
+      break;
+    case "prusaslicer":
+      uri = `prusaslicer://open?file=${encodeURIComponent(fileUrl)}`;
+      break;
+    case "bambustudio":
+      uri = `bambustudio://open?file=${encodeURIComponent(fileUrl)}`;
+      break;
+    default:
+      uri = fileUrl;
+  }
+  window.location.href = uri;
+}
+
+window.stlVaultOpenInSlicer = openInSlicer;
+
+if (slicerSelect) {
+  slicerSelect.value = state.slicer;
+  slicerSelect.addEventListener("change", (e) => {
+    state.slicer = e.target.value;
+    localStorage.setItem("stl_vault_slicer", state.slicer);
+    renderContent();
+  });
 }
 
 /* ------------------------------------------------------------------ boot */
@@ -275,6 +326,19 @@ function renderContent() {
 function cardActions(entry, isFolder) {
   const box = document.createElement("div");
   box.className = "cactions";
+
+  if (!isFolder) {
+    const sliceBtn = document.createElement("button");
+    sliceBtn.className = "slice-btn";
+    sliceBtn.textContent = "🍰";
+    sliceBtn.title = `Open in ${getSlicerName(state.slicer)}`;
+    sliceBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openInSlicer(entry, state.activeLib);
+    });
+    box.appendChild(sliceBtn);
+  }
+
   const rn = document.createElement("button");
   rn.textContent = "✏️";
   rn.title = "rename";
@@ -285,6 +349,7 @@ function cardActions(entry, isFolder) {
     await api.rename(state.activeLib, entry.path, name);
     refresh();
   });
+
   const del = document.createElement("button");
   del.className = "del";
   del.textContent = "🗑";
@@ -295,6 +360,7 @@ function cardActions(entry, isFolder) {
     await api.del(state.activeLib, entry.path);
     refresh();
   });
+
   box.append(rn, del);
   return box;
 }
@@ -371,7 +437,7 @@ function renderListView(folders, files) {
     const sortIco = isCur ? (state.sortAsc ? " ▲" : " ▼") : "";
     headerHTML += `<th data-col="${h.key}">${h.label}<span class="sort-ico">${sortIco}</span></th>`;
   });
-  headerHTML += "<th style='width:50px'></th></tr>";
+  headerHTML += "<th style='width:90px'></th></tr>";
   thead.innerHTML = headerHTML;
 
   thead.querySelectorAll("th[data-col]").forEach((th) => {
@@ -490,7 +556,6 @@ function fillThumbNow(host, file) {
     return;
   }
 
-  // Skip client background rendering for files > 30 MB to prevent main thread freezing
   if (file.size && file.size > 30 * 1024 * 1024) {
     const badge = document.createElement("div");
     badge.className = "rendering";
@@ -718,6 +783,17 @@ function showContextMenu(x, y, entry, isFolder) {
   title.textContent = `${isFolder ? "📁" : "📄"} ${entry.name}`;
   ctxMenuEl.appendChild(title);
 
+  if (!isFolder) {
+    const openSlicerItem = document.createElement("div");
+    openSlicerItem.className = "ctx-item";
+    openSlicerItem.innerHTML = `<span>🍰 Open in ${getSlicerName(state.slicer)}</span>`;
+    openSlicerItem.addEventListener("click", () => {
+      hideContextMenu();
+      openInSlicer(entry, state.activeLib);
+    });
+    ctxMenuEl.appendChild(openSlicerItem);
+  }
+
   const renameItem = document.createElement("div");
   renameItem.className = "ctx-item";
   renameItem.innerHTML = `<span>✏️ Rename</span>`;
@@ -792,7 +868,6 @@ async function pumpThumbQueue() {
   if (!job) return;
   thumbActive += 1;
 
-  // Timeout guard (6 seconds max per thumbnail render)
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error("Timeout")), 6000)
   );

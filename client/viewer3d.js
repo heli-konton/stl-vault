@@ -41,13 +41,11 @@ function loadGeometry(path, libId = "") {
 
   if (geometryCache.has(key)) {
     const entry = geometryCache.get(key);
-    // Refresh LRU order
     geometryCache.delete(key);
     geometryCache.set(key, entry);
     return entry.promise;
   }
 
-  // Evict oldest if cache limit reached
   if (geometryCache.size >= MAX_CACHE_SIZE) {
     const oldestKey = geometryCache.keys().next().value;
     const oldest = geometryCache.get(oldestKey);
@@ -80,7 +78,6 @@ function loadGeometry(path, libId = "") {
       geo.scale(scale, scale, scale);
       geo.computeVertexNormals();
 
-      // Store resolved geometry reference for disposal
       const cached = geometryCache.get(key);
       if (cached) cached.geo = geo;
       return geo;
@@ -226,7 +223,6 @@ let popTimer = null;
 let popHideTimer = null;
 
 export function attachHoverPreview(cardEl, file, libId = "") {
-  // Skip auto hover popout for huge files > 35 MB to keep scrolling fast
   if (file.size && file.size > 35 * 1024 * 1024) return;
 
   cardEl.addEventListener("mouseenter", () => {
@@ -262,6 +258,7 @@ function hidePop() {
 const modal = document.getElementById("modal");
 const modalBody = document.getElementById("modalBody");
 const modalTitle = document.getElementById("modalTitle");
+const modalSliceBtn = document.getElementById("modalSliceBtn");
 let modalViewer = null;
 
 export function openModalViewer(file, libId = "") {
@@ -274,6 +271,12 @@ export function openModalViewer(file, libId = "") {
   }
   const oldCanvas = modalBody.querySelector("canvas");
   if (oldCanvas) oldCanvas.remove();
+
+  if (modalSliceBtn) {
+    modalSliceBtn.onclick = () => {
+      if (window.stlVaultOpenInSlicer) window.stlVaultOpenInSlicer(file, libId);
+    };
+  }
 
   modalViewer = makeViewer(modalBody, true);
   modalViewer.show(file.path, libId);

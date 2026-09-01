@@ -15,13 +15,13 @@
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--void);color:var(--ink);font-family:var(--sans);font-size:13px;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;overflow:hidden}
-button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-thumb{background:#1c2530;border-radius:999px}
 
 /* ---------- toolbar ---------- */
 .toolbar{
-  height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;
+  height:48px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;
   border-bottom:1px solid var(--hairline);background:rgba(11,14,18,.92);
 }
 .brand{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.22em;color:#fff}
@@ -36,7 +36,7 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .tbtn{
   font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
   padding:6px 12px;border-radius:999px;border:1px solid var(--hairline);color:var(--ink-dim);
-  transition:all .15s;
+  transition:all .15s;display:inline-flex;align-items:center;gap:4px;
 }
 .vbtn{
   font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:999px;border:0;color:var(--ink-dim);
@@ -46,9 +46,18 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .vbtn.active{background:var(--surface-2);color:var(--accent);font-weight:600}
 .tbtn.mini{padding:2px 7px;font-size:9px}
 .tbtn:hover{color:var(--accent);border-color:rgba(var(--accent-rgb),.5)}
+
+.slicer-select{
+  background:var(--surface);border:1px solid var(--hairline);border-radius:999px;
+  padding:5px 10px;font-family:var(--mono);font-size:10px;color:var(--accent);
+  outline:none;letter-spacing:.05em;
+}
+.slicer-select:hover{border-color:var(--accent)}
+.slicer-select option{background:#131920;color:var(--ink)}
+
 .search{
   background:#080c11;border:1px solid var(--hairline);border-radius:8px;
-  padding:5px 10px;font-size:12px;color:var(--ink);outline:none;width:160px;
+  padding:5px 10px;font-size:12px;color:var(--ink);outline:none;width:150px;
 }
 .search:focus{border-color:rgba(var(--accent-rgb),.5)}
 
@@ -123,6 +132,7 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
   display:flex;align-items:center;justify-content:center;
 }
 .cactions button:hover{color:var(--accent);border-color:var(--accent)}
+.cactions button.slice-btn:hover{color:var(--teal);border-color:var(--teal)}
 .cactions button.del:hover{color:var(--fail);border-color:var(--fail)}
 
 /* ---------- finder list view ---------- */
@@ -149,11 +159,13 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .list-row .row-actions{display:none;gap:4px}
 .list-row:hover .row-actions{display:flex}
 .row-actions button{
-  width:22px;height:22px;border-radius:6px;background:rgba(8,12,17,.9);
+  height:22px;padding:0 6px;border-radius:6px;background:rgba(8,12,17,.9);
   border:1px solid var(--hairline);color:var(--ink-dim);font-size:10px;
-  display:flex;align-items:center;justify-content:center;
+  display:flex;align-items:center;justify-content:center;gap:3px;
+  font-family:var(--mono);
 }
 .row-actions button:hover{color:var(--accent);border-color:var(--accent)}
+.row-actions button.slice-btn:hover{color:var(--teal);border-color:var(--teal)}
 .row-actions button.del:hover{color:var(--fail);border-color:var(--fail)}
 
 .empty{
@@ -242,6 +254,13 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
   <span class="brand">STL <em>VAULT</em></span>
   <div class="crumbs" id="crumbs"></div>
   <div class="spacer"></div>
+  <select class="slicer-select" id="slicerSelect" title="Default Slicer Target">
+    <option value="orcaslicer">🍰 OrcaSlicer</option>
+    <option value="anycubic">🍰 Anycubic Next</option>
+    <option value="elegoo">🍰 Elegoo Slicer</option>
+    <option value="prusaslicer">🍰 PrusaSlicer</option>
+    <option value="bambustudio">🍰 Bambu Studio</option>
+  </select>
   <div class="view-toggle">
     <button class="vbtn active" id="viewGridBtn" title="Icon Grid View">🔲 Icons</button>
     <button class="vbtn" id="viewListBtn" title="List View">☰ List</button>
@@ -275,7 +294,11 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 
 <div class="modal" id="modal">
   <div class="modal-box">
-    <div class="modal-head"><b id="modalTitle"></b><button class="x" id="modalClose">✕</button></div>
+    <div class="modal-head">
+      <b id="modalTitle"></b>
+      <button class="tbtn mini" id="modalSliceBtn" style="margin-left:12px;color:var(--teal)">🍰 Open in Slicer</button>
+      <button class="x" id="modalClose">✕</button>
+    </div>
     <div class="modal-body" id="modalBody">
       <div class="modal-hint">drag to orbit · scroll to zoom · right-drag to pan</div>
     </div>
