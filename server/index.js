@@ -1,0 +1,278 @@
+// STL Vault — self-hosted 3D model manager (STL & 3MF).
+// Filesystem-backed: folders on disk are folders in the UI. No database.
+
+const express = require("express");
+const compression = require("compression");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+
+const PORT = process.env.PORT || 4173;
+const LIBRARIES_FILE = path.join(__dirname, "..", "libraries.json");
+
+function loadLibraries() {
+  const defaultRoot = path.resolve(process.env.STLS_ROOT || path.join(__dirname, "..", "stls"));
+  let list = [{ id: "default", name: "Main Library", path: defaultRoot }];
+  if (fs.existsSync(LIBRARIES_FILE)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(LIBRARIES_FILE, "utf8"));
+      if (Array.isArray(data) && data.length > 0) list = data;
+    } catch {}
+  }
+  for (const lib of list) {
+    const root = path.resolve(lib.path);
+    const thumbs = path.join(root, ".thumbs");
+    const trash = path.join(root, ".trash");
+    for (const d of [root, thumbs, trash]) fs.mkdirSync(d, { recursive: true });
+  }
+  return list;
+}
+
+function saveLibraries(list) {
+  fs.writeFileSync(LIBRARIES_FILE, JSON.stringify(list, null, 2));
+}
+
+function getLib(libId) {
+  const libs = loadLibraries();
+  return libs.find((l) => l.id === libId) || libs[0];
+}
+
+function safeRel(rel, libId) {
+  const lib = getLib(libId);
+  const root = path.resolve(lib.path);
+  const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const abs = path.resolve(root, clean);
+  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+  return { abs, root, rel: path.relative(root, abs).split(path.sep).join("/"), lib };
+}
+
+const isHidden = (name) => name.startsWith(".");
+const is3DFile = (name) => /\.(stl|3mf)$/i.test(name);
+
+function folderEntry(abs, root) {
+  const st = fs.statSync(abs);
+  const rel = path.relative(root, abs).split(path.sep).join("/");
+  return { kind: "folder", name: path.basename(abs), path: rel, mtime: st.mtimeMs };
+}
+
+function hasThumb(tp) {
+  try {
+    return fs.existsSync(tp) && fs.statSync(tp).size > 100;
+  } catch {
+    return false;
+  }
+}
+
+function thumbPath(root, rel, size, mtime) {
+  const key = crypto.createHash("sha1").update(`${rel}:${size}:${Math.round(mtime)}`).digest("hex");
+  return path.join(root, ".thumbs", `${key}.png`);
+}
+
+function fileEntry(abs, root) {
+  const st = fs.statSync(abs);
+  const rel = path.relative(root, abs).split(path.sep).join("/");
+  const tp = thumbPath(root, rel, st.size, st.mtimeMs);
+  const ext = path.extname(abs).toLowerCase().replace(".", "");
+  return {
+    kind: ext === "3mf" ? "3mf" : "stl",
+    name: path.basename(abs),
+    path: rel,
+    size: st.size,
+    mtime: st.mtimeMs,
+    thumb: hasThumb(tp),
+  };
+}
+
+function listDir(abs, root) {
+  const out = { folders: [], files: [] };
+  for (const name of fs.readdirSync(abs)) {
+    if (isHidden(name)) continue;
+    const child = path.join(abs, name);
+    let st;
+    try {
+      st = fs.statSync(child);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) out.folders.push(folderEntry(child, root));
+    else if (is3DFile(name)) out.files.push(fileEntry(child, root));
+  }
+  out.folders.sort((a, b) => a.name.localeCompare(b.name));
+  out.files.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+const app = express();
+app.use(compression());
+app.use(express.json({ limit: "8mb" }));
+app.use(express.static(path.join(__dirname, "..", "client")));
+app.use("/vendor/three", express.static(path.join(__dirname, "..", "node_modules", "three"), { maxAge: "7d" }));
+
+// -- Libraries API -----------------------------------------------------------
+
+app.get("/api/libraries", (req, res) => {
+  res.json(loadLibraries());
+});
+
+app.post("/api/libraries", (req, res) => {
+  const name = String(req.body.name || "").trim();
+  const libPath = String(req.body.path || "").trim();
+  if (!name || !libPath) return res.status(400).json({ error: "Name and path required" });
+  const absPath = path.resolve(libPath);
+  for (const d of [absPath, path.join(absPath, ".thumbs"), path.join(absPath, ".trash")]) {
+    fs.mkdirSync(d, { recursive: true });
+  }
+  const libs = loadLibraries();
+  const id = "lib-" + crypto.randomBytes(4).toString("hex");
+  const newLib = { id, name, path: absPath };
+  libs.push(newLib);
+  saveLibraries(libs);
+  res.json(newLib);
+});
+
+app.delete("/api/libraries/:id", (req, res) => {
+  const libs = loadLibraries();
+  if (libs.length <= 1) return res.status(400).json({ error: "Cannot remove the primary library" });
+  const filtered = libs.filter((l) => l.id !== req.params.id);
+  saveLibraries(filtered);
+  res.json({ ok: true });
+});
+
+// -- Model API ---------------------------------------------------------------
+
+app.get("/api/tree", (req, res) => {
+  const lib = getLib(req.query.lib);
+  const root = path.resolve(lib.path);
+  function walk(abs, depth) {
+    if (depth > 8) return null;
+    const node = folderEntry(abs, root);
+    node.children = [];
+    for (const name of fs.readdirSync(abs)) {
+      if (isHidden(name)) continue;
+      const child = path.join(abs, name);
+      try {
+        if (fs.statSync(child).isDirectory()) {
+          const sub = walk(child, depth + 1);
+          if (sub) node.children.push(sub);
+        }
+      } catch { /* skip */ }
+    }
+    node.children.sort((a, b) => a.name.localeCompare(b.name));
+    return node;
+  }
+  const tree = walk(root, 0);
+  if (tree) tree.name = lib.name;
+  res.json(tree);
+});
+
+app.get("/api/files", (req, res) => {
+  const info = safeRel(req.query.path || "", req.query.lib);
+  if (!info || !fs.existsSync(info.abs) || !fs.statSync(info.abs).isDirectory()) {
+    return res.status(400).json({ error: "not a folder" });
+  }
+  res.json(listDir(info.abs, info.root));
+});
+
+app.get("/api/file", (req, res) => {
+  const info = safeRel(req.query.path || "", req.query.lib);
+  if (!info || !fs.existsSync(info.abs) || !is3DFile(info.abs)) return res.status(404).end();
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.sendFile(info.abs);
+});
+
+app.get("/api/thumb", (req, res) => {
+  const info = safeRel(req.query.path || "", req.query.lib);
+  if (!info || !fs.existsSync(info.abs)) return res.status(404).end();
+  const st = fs.statSync(info.abs);
+  const tp = thumbPath(info.root, info.rel, st.size, st.mtimeMs);
+  if (!hasThumb(tp)) return res.status(404).end();
+  res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+  res.sendFile(tp);
+});
+
+app.post("/api/thumb", (req, res) => {
+  const info = safeRel(req.body.path || "", req.body.lib);
+  const dataUrl = String(req.body.png || "");
+  if (!info || !fs.existsSync(info.abs)) return res.status(400).json({ error: "bad path" });
+  const m = dataUrl.match(/^data:image\/png;base64,(.+)$/);
+  if (!m) return res.status(400).json({ error: "bad png" });
+  const st = fs.statSync(info.abs);
+  fs.writeFileSync(thumbPath(info.root, info.rel, st.size, st.mtimeMs), Buffer.from(m[1], "base64"));
+  res.json({ ok: true });
+});
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const info = safeRel(req.query.path || "", req.query.lib);
+      cb(null, info ? info.abs : getLib(req.query.lib).path);
+    },
+    filename: (req, file, cb) => cb(null, path.basename(file.originalname).replace(/[^\w.\- ]+/g, "_")),
+  }),
+  fileFilter: (req, file, cb) => cb(null, is3DFile(file.originalname)),
+  limits: { fileSize: 200 * 1024 * 1024 },
+});
+
+app.post("/api/upload", upload.array("files", 30), (req, res) => {
+  res.json({ ok: true, count: (req.files || []).length });
+});
+
+app.post("/api/mkdir", (req, res) => {
+  const info = safeRel(req.body.path || "", req.body.lib);
+  const name = String(req.body.name || "").trim().replace(/[\\/]/g, "");
+  if (!info || !name) return res.status(400).json({ error: "bad folder name" });
+  const abs = path.join(info.abs, name);
+  if (fs.existsSync(abs)) return res.status(409).json({ error: "already exists" });
+  fs.mkdirSync(abs);
+  res.json({ ok: true });
+});
+
+app.post("/api/move", (req, res) => {
+  const fromInfo = safeRel(req.body.from || "", req.body.fromLib || req.body.lib);
+  const toInfo = safeRel(req.body.to || "", req.body.toLib || req.body.lib);
+  if (!fromInfo || !toInfo || !fs.existsSync(fromInfo.abs) || !fs.statSync(toInfo.abs).isDirectory()) {
+    return res.status(400).json({ error: "bad move target" });
+  }
+  if (toInfo.abs.startsWith(fromInfo.abs + path.sep)) {
+    return res.status(400).json({ error: "cannot move a folder into itself" });
+  }
+  const dest = path.join(toInfo.abs, path.basename(fromInfo.abs));
+  if (fs.existsSync(dest)) return res.status(409).json({ error: "name exists at destination" });
+
+  try {
+    fs.renameSync(fromInfo.abs, dest);
+  } catch (err) {
+    if (err.code === "EXDEV") {
+      fs.cpSync(fromInfo.abs, dest, { recursive: true });
+      fs.rmSync(fromInfo.abs, { recursive: true, force: true });
+    } else {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/rename", (req, res) => {
+  const info = safeRel(req.body.path || "", req.body.lib);
+  const name = String(req.body.name || "").trim().replace(/[\\/]/g, "");
+  if (!info || !name || !fs.existsSync(info.abs)) return res.status(400).json({ error: "bad rename" });
+  const dest = path.join(path.dirname(info.abs), name);
+  if (fs.existsSync(dest)) return res.status(409).json({ error: "name exists" });
+  fs.renameSync(info.abs, dest);
+  res.json({ ok: true });
+});
+
+app.post("/api/delete", (req, res) => {
+  const info = safeRel(req.body.path || "", req.body.lib);
+  if (!info || info.abs === info.root || !fs.existsSync(info.abs)) return res.status(400).json({ error: "bad delete" });
+  const dest = path.join(info.root, ".trash", `${Date.now()}-${path.basename(info.abs)}`);
+  fs.renameSync(info.abs, dest);
+  res.json({ ok: true });
+});
+
+app.listen(PORT, () => {
+  console.log(`STL Vault listening on http://localhost:${PORT}`);
+  const libs = loadLibraries();
+  console.log(`Configured libraries: ${libs.map((l) => `${l.name} (${l.path})`).join(", ")}`);
+});

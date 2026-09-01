@@ -1,0 +1,16 @@
+[Unit]
+Description=STL Vault — self-hosted STL file manager
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stl-vault
+Environment=PORT=4173
+Environment=STLS_ROOT=/mnt/storage/stls
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

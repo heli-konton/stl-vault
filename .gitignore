@@ -1,0 +1,8 @@
+node_modules/
+stls/
+.thumbs/
+.trash/
+.DS_Store
+._*
+libraries.json
+*.log
