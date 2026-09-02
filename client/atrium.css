@@ -165,15 +165,15 @@ button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:
 }
 .lib-list{margin-bottom:0;display:flex;flex-direction:column;gap:3px}
 .lib-item,.tree-item{
-  display:flex;align-items:center;justify-content:flex-start;gap:9px;width:100%;text-align:left;
+  align-items:center;width:100%;text-align:left;
   height:34px;padding:0 8px;border-radius:var(--r-md);
   font-size:13px;color:var(--ink-dim);border:1px solid transparent;
   transition:background .15s,color .15s;
 }
-.lib-item{justify-content:flex-start}
-.lib-item > span:last-child,.tree-item > span:last-child{margin-left:0;font-size:11.5px;color:var(--ink-faint)}
-.lib-item > span:first-child,.tree-label{display:flex;align-items:center;gap:9px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tree-label{flex:1;color:var(--ink-dim)}
+.lib-item{display:flex;justify-content:flex-start;gap:9px}
+.tree-item{display:grid;grid-template-columns:12px 15px minmax(0,1fr);column-gap:9px;justify-items:start}
+.lib-item > span:first-child{display:flex;align-items:center;justify-content:flex-start;gap:9px;min-width:0;margin-right:auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-label{display:block;justify-self:start;width:100%;min-width:0;margin:0;text-align:left;color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lib-item:hover,.tree-item:hover{background:var(--surface-2);color:var(--ink)}
 .lib-item:active,.tree-item:active{background:rgba(var(--accent-rgb),.20)}
 .lib-item.active{
@@ -185,12 +185,21 @@ button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:
 .lib-item.drop-target,.tree-item.drop-target{
   border-color:var(--teal);background:rgba(var(--teal-rgb),.14);
 }
-.tree-item .tw{color:var(--ink-faint);width:10px;flex:none;font-size:9px;display:flex;align-items:center;justify-content:center}
+.tree-item .tw{color:var(--ink-faint);width:12px;height:100%;font-size:9px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .12s,color .12s}
+.tree-item.node-collapsed .tw{transform:rotate(-90deg)}
+.tree-item .tw:hover{color:var(--ink)}
 .tree-item svg{flex:none;opacity:.9}
-.tree-kids{margin-left:13px}
+.tree-kids{display:none;margin-left:13px}
+.tree-kids.open{display:block}
 #tree.collapsed{display:none}
 #treeToggleBtn.collapsed svg{transform:rotate(-90deg)}
 #treeToggleBtn .chev-down svg{transform:rotate(90deg)}
+.sidebar-head-actions{display:flex;align-items:center;gap:5px}
+#treeExpandAllBtn .tree-collapse-icon,#treeExpandAllBtn .tree-expand-icon{display:flex;align-items:center;justify-content:center;gap:0}
+#treeExpandAllBtn .tree-collapse-icon svg{transform:rotate(90deg);margin-left:-4px}
+#treeExpandAllBtn .tree-expand-icon svg{transform:rotate(-90deg);margin-left:-4px}
+#treeExpandAllBtn span svg:first-child{margin-left:0}
+#treeExpandAllBtn:disabled{opacity:.32;cursor:default;pointer-events:none}
 .nav-back:disabled{opacity:.32;cursor:default;pointer-events:none}
 
 .content{

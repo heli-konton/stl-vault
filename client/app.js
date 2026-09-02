@@ -4,6 +4,19 @@
 import { attachHoverPreview, hideHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
 import { ICON } from "./icons.js";
 
+function loadCollapsedTreePaths() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("stl_vault_collapsed_tree_paths") || "[]");
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsedTreePaths() {
+  localStorage.setItem("stl_vault_collapsed_tree_paths", JSON.stringify([...state.collapsedTreePaths]));
+}
+
 const state = {
   activeLib: "default",
   libraries: [],
@@ -17,6 +30,7 @@ const state = {
   slicer: localStorage.getItem("stl_vault_slicer") || "orcaslicer",
   selectedPaths: new Set(),
   treeCollapsed: localStorage.getItem("stl_vault_tree_collapsed") === "1",
+  collapsedTreePaths: loadCollapsedTreePaths(),
 };
 
 const contentEl = document.getElementById("content");
@@ -30,6 +44,7 @@ const slicerSelect = document.getElementById("slicerSelect");
 const batchBar = document.getElementById("batchBar");
 const batchCount = document.getElementById("batchCount");
 const treeToggleBtn = document.getElementById("treeToggleBtn");
+const treeExpandAllBtn = document.getElementById("treeExpandAllBtn");
 const backBtn = document.getElementById("backBtn");
 
 // IntersectionObserver for Lazy Loading Thumbnails
@@ -279,6 +294,17 @@ treeToggleBtn?.addEventListener("click", () => {
   renderTree();
 });
 
+treeExpandAllBtn?.addEventListener("click", () => {
+  if (!state.tree) return;
+  if (state.collapsedTreePaths.size) {
+    state.collapsedTreePaths.clear();
+  } else {
+    collectTreeBranchPaths(state.tree).forEach((path) => state.collapsedTreePaths.add(path));
+  }
+  saveCollapsedTreePaths();
+  renderTree();
+});
+
 /* -------------------------------------------------------------- libraries */
 
 function renderLibraries() {
@@ -319,30 +345,61 @@ function renderTree() {
 function updateTreeToggle() {
   if (!treeToggleBtn) return;
   treeToggleBtn.classList.toggle("collapsed", state.treeCollapsed);
-  treeToggleBtn.title = state.treeCollapsed ? "Expand folders" : "Collapse folders";
+  treeToggleBtn.title = state.treeCollapsed ? "Show folder panel" : "Hide folder panel";
   treeToggleBtn.innerHTML = state.treeCollapsed ? ICON.chevron(12) : `<span class="chev-down">${ICON.chevron(12)}</span>`;
+  updateTreeExpandAllButton();
+}
+
+function updateTreeExpandAllButton() {
+  if (!treeExpandAllBtn) return;
+  const hasCollapsed = state.collapsedTreePaths.size > 0;
+  treeExpandAllBtn.classList.toggle("has-collapsed", hasCollapsed);
+  treeExpandAllBtn.disabled = state.treeCollapsed;
+  treeExpandAllBtn.title = hasCollapsed ? "Expand tree" : "Collapse tree";
+  treeExpandAllBtn.innerHTML = hasCollapsed
+    ? `<span class="tree-expand-icon">${ICON.chevron(12)}${ICON.chevron(12)}</span>`
+    : `<span class="tree-collapse-icon">${ICON.chevron(12)}${ICON.chevron(12)}</span>`;
+}
+
+function collectTreeBranchPaths(node, out = []) {
+  if (node.children?.length) out.push(node.path || "");
+  node.children?.forEach((child) => collectTreeBranchPaths(child, out));
+  return out;
 }
 
 function renderTreeNode(node, isRoot = false) {
   const wrap = document.createElement("div");
   const btn = document.createElement("button");
-  btn.className = "tree-item" + (node.path === state.path || (isRoot && state.path === "") ? " current" : "");
-  btn.innerHTML = `<span class="tw">${node.children?.length ? ICON.chevron(9) : ""}</span><span class="tree-ico">${isRoot ? ICON.archive() : ICON.folder()}</span><span class="tree-label">${isRoot ? (getCurLib()?.name || "Library") : node.name}</span>`;
-  btn.addEventListener("click", () => {
-    const kids = wrap.querySelector(".tree-kids");
-    if (kids && node.path === state.path) kids.classList.toggle("open");
-    navigate(isRoot ? "" : node.path);
+  const nodePath = isRoot ? "" : node.path;
+  const hasKids = !!node.children?.length;
+  const isCollapsed = hasKids && state.collapsedTreePaths.has(nodePath);
+  btn.className = "tree-item" + (nodePath === state.path || (isRoot && state.path === "") ? " current" : "") + (isCollapsed ? " node-collapsed" : "");
+  btn.innerHTML = `<span class="tw">${hasKids ? ICON.chevron(9) : ""}</span><span class="tree-ico">${isRoot ? ICON.archive() : ICON.folder()}</span><span class="tree-label">${isRoot ? (getCurLib()?.name || "Library") : node.name}</span>`;
+
+  const twisty = btn.querySelector(".tw");
+  twisty?.addEventListener("click", (e) => {
+    if (!hasKids) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (state.collapsedTreePaths.has(nodePath)) state.collapsedTreePaths.delete(nodePath);
+    else state.collapsedTreePaths.add(nodePath);
+    saveCollapsedTreePaths();
+    renderTree();
   });
-  makeDropTarget(btn, state.activeLib, isRoot ? "" : node.path);
+
+  btn.addEventListener("click", () => {
+    navigate(nodePath);
+  });
+  makeDropTarget(btn, state.activeLib, nodePath);
   if (!isRoot) {
     attachContextMenu(btn, node, true);
   }
   wrap.appendChild(btn);
 
-  if (node.children?.length) {
+  if (hasKids) {
     const kids = document.createElement("div");
-    kids.className = "tree-kids open";
-    node.children.forEach((c) => kids.appendChild(renderTreeNode(c)));
+    kids.className = "tree-kids" + (isCollapsed ? "" : " open");
+    if (!isCollapsed) node.children.forEach((c) => kids.appendChild(renderTreeNode(c)));
     wrap.appendChild(kids);
   }
   return wrap;
