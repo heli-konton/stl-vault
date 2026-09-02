@@ -475,6 +475,7 @@ function renderContent() {
   }
 
   makeDropTarget(contentEl, state.activeLib, state.path);
+  warmCurrentFolderThumbs(folders, files);
 }
 
 function cardActions(entry, isFolder) {
@@ -810,8 +811,7 @@ function fillThumbNow(host, file) {
   shimmer.className = "rendering";
   shimmer.textContent = "RENDERING…";
   host.appendChild(shimmer);
-  thumbQueue.push({ host, file, libId: state.activeLib, shimmer });
-  pumpThumbQueue();
+  queueThumbRender({ host, file, libId: state.activeLib, shimmer, urgent: true });
 }
 
 function toggleSelection(itemPath) {
@@ -1107,38 +1107,75 @@ function showContextMenu(x, y, entry, isFolder) {
 /* -------------------------------------------------- thumbnails (cached) */
 
 const thumbQueue = [];
+const thumbQueued = new Set();
 let thumbActive = 0;
+const THUMB_CONCURRENCY = 2;
+const MAX_WARM_THUMBS_PER_FOLDER = 80;
+
+function thumbKey(file, libId) {
+  return `${libId}:${file.path}`;
+}
+
+function queueThumbRender(job) {
+  if (!job.file || job.file.thumb || (job.file.size && job.file.size > 30 * 1024 * 1024)) return;
+  const key = thumbKey(job.file, job.libId);
+  if (thumbQueued.has(key)) return;
+  thumbQueued.add(key);
+  job.key = key;
+  if (job.urgent) thumbQueue.unshift(job);
+  else thumbQueue.push(job);
+  pumpThumbQueue();
+}
+
+function warmCurrentFolderThumbs(folders, files) {
+  const candidates = [
+    ...folders.map((folder) => folder.preview).filter(Boolean),
+    ...files,
+  ].filter((file) => !file.thumb && (!file.size || file.size <= 30 * 1024 * 1024));
+
+  candidates.slice(0, MAX_WARM_THUMBS_PER_FOLDER).forEach((file) => {
+    queueThumbRender({ file, libId: state.activeLib, background: true });
+  });
+}
 
 async function pumpThumbQueue() {
-  if (thumbActive >= 1) return;
-  const job = thumbQueue.shift();
-  if (!job) return;
-  thumbActive += 1;
+  while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length) {
+    const job = thumbQueue.shift();
+    thumbActive += 1;
+    runThumbJob(job).finally(() => {
+      thumbActive -= 1;
+      pumpThumbQueue();
+    });
+  }
+}
 
+async function runThumbJob(job) {
   const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout")), 6000)
+    setTimeout(() => reject(new Error("Timeout")), 9000)
   );
 
   try {
     const png = await Promise.race([renderThumbPng(job.file.path, job.libId), timeoutPromise]);
-    const img = document.createElement("img");
-    img.src = png;
-    img.alt = job.file.name;
-    img.onerror = () => {
-      job.host.innerHTML = `<div class="rendering" style="color:var(--fail)">${ICON.warn(13)} image error</div>`;
-    };
-    job.shimmer.remove();
-    job.host.appendChild(img);
     saveThumb(job.file.path, job.libId, png);
+
+    if (job.host?.isConnected) {
+      const img = document.createElement("img");
+      img.src = png;
+      img.alt = job.file.name;
+      img.onerror = () => {
+        job.host.innerHTML = `<div class="rendering" style="color:var(--fail)">${ICON.warn(13)} image error</div>`;
+      };
+      job.shimmer?.remove();
+      job.host.appendChild(img);
+    }
   } catch {
-    if (job.shimmer) {
+    if (job.shimmer?.isConnected) {
       job.shimmer.style.animation = "none";
       job.shimmer.style.color = "var(--ink-faint)";
       job.shimmer.innerHTML = ICON.cube(62);
     }
   } finally {
-    thumbActive -= 1;
-    pumpThumbQueue();
+    thumbQueued.delete(job.key);
   }
 }
 
