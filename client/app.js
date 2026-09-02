@@ -1,7 +1,7 @@
 // app.js — STL Vault file manager: libraries, tree, grid, list view, breadcrumbs,
 // Finder/Explorer drag & drop, slicer integration, 3MF metadata, import from link, batch selection.
 
-import { attachHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
+import { attachHoverPreview, hideHoverPreview, openModalViewer, renderThumbPng, saveThumb } from "/viewer3d.js";
 import { ICON } from "./icons.js";
 
 const state = {
@@ -16,6 +16,7 @@ const state = {
   sortAsc: true,
   slicer: localStorage.getItem("stl_vault_slicer") || "orcaslicer",
   selectedPaths: new Set(),
+  treeCollapsed: localStorage.getItem("stl_vault_tree_collapsed") === "1",
 };
 
 const contentEl = document.getElementById("content");
@@ -28,6 +29,8 @@ const viewListBtn = document.getElementById("viewListBtn");
 const slicerSelect = document.getElementById("slicerSelect");
 const batchBar = document.getElementById("batchBar");
 const batchCount = document.getElementById("batchCount");
+const treeToggleBtn = document.getElementById("treeToggleBtn");
+const backBtn = document.getElementById("backBtn");
 
 // IntersectionObserver for Lazy Loading Thumbnails
 const thumbObserver = new IntersectionObserver(
@@ -38,7 +41,10 @@ const thumbObserver = new IntersectionObserver(
         observer.unobserve(el);
         const file = el._stlFile;
         const isRow = el._isRow;
-        if (file) {
+        const folder = el._stlFolder;
+        if (folder) {
+          fillFolderThumbNow(el, folder);
+        } else if (file) {
           if (isRow) fillRowThumbNow(el, file);
           else fillThumbNow(el, file);
         }
@@ -211,12 +217,27 @@ async function refresh() {
   renderViewToggle();
   renderContent();
   updateBatchBar();
+  updateBackButton();
 }
 
 function navigate(path) {
+  hideHoverPreview();
   state.path = path;
   state.selectedPaths.clear();
   refresh().catch((e) => alert(e.message));
+}
+
+function navigateBack() {
+  if (!state.path) return;
+  const parts = state.path.split("/").filter(Boolean);
+  parts.pop();
+  navigate(parts.join("/"));
+}
+
+function updateBackButton() {
+  if (!backBtn) return;
+  backBtn.disabled = !state.path;
+  backBtn.title = state.path ? "Back to parent folder" : "At library root";
 }
 
 function switchLibrary(libId) {
@@ -250,6 +271,14 @@ viewListBtn.addEventListener("click", () => {
   renderContent();
 });
 
+backBtn?.addEventListener("click", navigateBack);
+
+treeToggleBtn?.addEventListener("click", () => {
+  state.treeCollapsed = !state.treeCollapsed;
+  localStorage.setItem("stl_vault_tree_collapsed", state.treeCollapsed ? "1" : "0");
+  renderTree();
+});
+
 /* -------------------------------------------------------------- libraries */
 
 function renderLibraries() {
@@ -281,15 +310,24 @@ document.getElementById("addLibBtn").addEventListener("click", async () => {
 
 function renderTree() {
   treeEl.innerHTML = "";
-  if (!state.tree) return;
+  treeEl.classList.toggle("collapsed", state.treeCollapsed);
+  updateTreeToggle();
+  if (!state.tree || state.treeCollapsed) return;
   treeEl.appendChild(renderTreeNode(state.tree, true));
+}
+
+function updateTreeToggle() {
+  if (!treeToggleBtn) return;
+  treeToggleBtn.classList.toggle("collapsed", state.treeCollapsed);
+  treeToggleBtn.title = state.treeCollapsed ? "Expand folders" : "Collapse folders";
+  treeToggleBtn.innerHTML = state.treeCollapsed ? ICON.chevron(12) : `<span class="chev-down">${ICON.chevron(12)}</span>`;
 }
 
 function renderTreeNode(node, isRoot = false) {
   const wrap = document.createElement("div");
   const btn = document.createElement("button");
   btn.className = "tree-item" + (node.path === state.path || (isRoot && state.path === "") ? " current" : "");
-  btn.innerHTML = `<span class="tw">${node.children?.length ? ICON.chevron(9) : ""}</span><span>${isRoot ? ICON.archive() : ICON.folder()}</span><span>${isRoot ? (getCurLib()?.name || "Library") : node.name}</span>`;
+  btn.innerHTML = `<span class="tw">${node.children?.length ? ICON.chevron(9) : ""}</span><span class="tree-ico">${isRoot ? ICON.archive() : ICON.folder()}</span><span class="tree-label">${isRoot ? (getCurLib()?.name || "Library") : node.name}</span>`;
   btn.addEventListener("click", () => {
     const kids = wrap.querySelector(".tree-kids");
     if (kids && node.path === state.path) kids.classList.toggle("open");
@@ -440,9 +478,13 @@ function renderFolderCard(folder) {
   });
   el.appendChild(chk);
 
-  el.insertAdjacentHTML("beforeend", `<div class="thumb"><span class="big-ico">${ICON.folder(46)}</span></div>
+  const thumb = document.createElement("div");
+  thumb.className = "thumb";
+  el.appendChild(thumb);
+
+  el.insertAdjacentHTML("beforeend", `
     <div class="cname" title="${folder.name}">${folder.name}</div>
-    <div class="cmeta">folder</div>`);
+    <div class="cmeta">${folder.preview ? "folder · 3MF preview" : "folder"}</div>`);
   el.appendChild(cardActions(folder, true));
 
   el.addEventListener("click", (e) => {
@@ -456,6 +498,13 @@ function renderFolderCard(folder) {
   makeDraggable(el, folder, true);
   makeDropTarget(el, state.activeLib, folder.path);
   attachContextMenu(el, folder, true);
+
+  if (folder.preview) {
+    thumb._stlFolder = folder;
+    thumbObserver.observe(thumb);
+  } else {
+    fillFolderThumbNow(thumb, folder);
+  }
   return el;
 }
 
@@ -555,9 +604,12 @@ function renderListView(folders, files) {
     const isSelected = state.selectedPaths.has(folder.path);
     const tr = document.createElement("tr");
     tr.className = "list-row" + (isSelected ? " selected" : "");
+    const icoBox = document.createElement("div");
+    icoBox.className = "row-ico";
+
     tr.innerHTML = `
       <td class="name-col">
-        <div class="row-ico">${ICON.folder(15)}</div>
+        <span class="row-ico-cell"></span>
         <span title="${folder.name}">${folder.name}</span>
       </td>
       <td>Folder</td>
@@ -567,6 +619,8 @@ function renderListView(folders, files) {
         <div class="row-actions"></div>
       </td>
     `;
+    tr.querySelector(".row-ico-cell").replaceWith(icoBox);
+    fillRowFolderThumbNow(icoBox, folder);
     tr.querySelector(".row-actions").appendChild(cardActions(folder, true));
 
     tr.addEventListener("click", (e) => {
@@ -631,6 +685,29 @@ function renderListView(folders, files) {
 
   table.append(thead, tbody);
   return table;
+}
+
+function fillRowFolderThumbNow(host, folder) {
+  if (folder.preview?.thumb) {
+    const img = document.createElement("img");
+    img.src = `/api/thumb?path=${encodeURIComponent(folder.preview.path)}&lib=${encodeURIComponent(state.activeLib)}`;
+    img.alt = `${folder.name} preview`;
+    img.onerror = () => {
+      host.innerHTML = ICON.folder(15);
+    };
+    host.appendChild(img);
+    return;
+  }
+  host.innerHTML = ICON.folder(15);
+}
+
+function fillFolderThumbNow(host, folder) {
+  host.classList.toggle("folder-preview", !!folder.preview);
+  if (!folder.preview) {
+    host.innerHTML = `<span class="big-ico">${ICON.folder(46)}</span>`;
+    return;
+  }
+  fillThumbNow(host, folder.preview);
 }
 
 function fillRowThumbNow(host, file) {

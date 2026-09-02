@@ -51,10 +51,52 @@ function safeRel(rel, libId) {
 const isHidden = (name) => name.startsWith(".");
 const is3DFile = (name) => /\.(stl|3mf)$/i.test(name);
 
-function folderEntry(abs, root) {
+function folderEntry(abs, root, withPreview = false) {
   const st = fs.statSync(abs);
   const rel = path.relative(root, abs).split(path.sep).join("/");
-  return { kind: "folder", name: path.basename(abs), path: rel, mtime: st.mtimeMs };
+  const entry = {
+    kind: "folder",
+    name: path.basename(abs),
+    path: rel,
+    mtime: st.mtimeMs,
+  };
+  if (withPreview) entry.preview = findFolderPreview(abs, root);
+  return entry;
+}
+
+function findFolderPreview(abs, root) {
+  const queue = [{ abs, depth: 0 }];
+  let inspected = 0;
+
+  while (queue.length && inspected < 160) {
+    const cur = queue.shift();
+    let names = [];
+    try {
+      names = fs.readdirSync(cur.abs).filter((name) => !isHidden(name)).sort((a, b) => a.localeCompare(b));
+    } catch {
+      continue;
+    }
+
+    for (const name of names) {
+      if (!/\.3mf$/i.test(name)) continue;
+      const child = path.join(cur.abs, name);
+      inspected++;
+      try {
+        if (fs.statSync(child).isFile()) return fileEntry(child, root);
+      } catch { /* skip unreadable preview candidates */ }
+    }
+
+    if (cur.depth >= 3) continue;
+    for (const name of names) {
+      const child = path.join(cur.abs, name);
+      inspected++;
+      try {
+        if (fs.statSync(child).isDirectory()) queue.push({ abs: child, depth: cur.depth + 1 });
+      } catch { /* skip unreadable preview candidates */ }
+    }
+  }
+
+  return null;
 }
 
 function hasThumb(tp) {
@@ -143,7 +185,7 @@ function listDir(abs, root) {
     } catch {
       continue;
     }
-    if (st.isDirectory()) out.folders.push(folderEntry(child, root));
+    if (st.isDirectory()) out.folders.push(folderEntry(child, root, true));
     else if (is3DFile(name)) out.files.push(fileEntry(child, root));
   }
   out.folders.sort((a, b) => a.name.localeCompare(b.name));

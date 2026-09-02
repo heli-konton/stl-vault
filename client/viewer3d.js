@@ -221,21 +221,28 @@ const popMeta = document.getElementById("pviewMeta");
 let popViewer = null;
 let popTimer = null;
 let popHideTimer = null;
+let popToken = 0;
+let activePreviewEl = null;
 
 export function attachHoverPreview(cardEl, file, libId = "") {
   if (file.size && file.size > 35 * 1024 * 1024) return;
 
   cardEl.addEventListener("mouseenter", () => {
     clearTimeout(popHideTimer);
-    popTimer = setTimeout(() => showPop(cardEl, file, libId), 400);
+    clearTimeout(popTimer);
+    const token = ++popToken;
+    activePreviewEl = cardEl;
+    popTimer = setTimeout(() => {
+      if (token === popToken && cardEl.isConnected && cardEl.matches(":hover")) showPop(cardEl, file, libId, token);
+    }, 400);
   });
   cardEl.addEventListener("mouseleave", () => {
     clearTimeout(popTimer);
-    popHideTimer = setTimeout(hidePop, 140);
+    popHideTimer = setTimeout(hidePop, 80);
   });
 }
 
-function showPop(cardEl, file, libId = "") {
+function showPop(cardEl, file, libId = "", token = popToken) {
   if (!popViewer) popViewer = makeViewer(popCanvasHost, false);
   popMeta.innerHTML = `<b>${file.name}</b><span>${fmtSize(file.size)}</span>`;
   const r = cardEl.getBoundingClientRect();
@@ -246,12 +253,31 @@ function showPop(cardEl, file, libId = "") {
   popview.style.left = `${x}px`;
   popview.style.top = `${y}px`;
   popview.classList.add("show");
-  popViewer.show(file.path, libId);
+  popViewer.show(file.path, libId).catch(() => {
+    if (token === popToken) hidePop();
+  });
+}
+
+export function hideHoverPreview() {
+  hidePop();
 }
 
 function hidePop() {
+  popToken++;
+  activePreviewEl = null;
+  clearTimeout(popTimer);
+  clearTimeout(popHideTimer);
   popview.classList.remove("show");
 }
+
+window.addEventListener("scroll", hidePop, true);
+document.addEventListener("scroll", hidePop, true);
+window.addEventListener("wheel", hidePop, { passive: true, capture: true });
+document.addEventListener("wheel", hidePop, { passive: true, capture: true });
+document.getElementById("content")?.addEventListener("scroll", hidePop, { passive: true });
+document.addEventListener("visibilitychange", () => { if (document.hidden) hidePop(); });
+window.addEventListener("blur", hidePop);
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") hidePop(); });
 
 // -- pinned modal viewer -------------------------------------------------------
 
