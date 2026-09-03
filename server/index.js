@@ -15,7 +15,7 @@ const LIBRARIES_FILE = path.join(__dirname, "..", "libraries.json");
 function loadLibraries() {
   const defaultRoot = path.resolve(process.env.STLS_ROOT || path.join(__dirname, "..", "stls"));
   let list = [{ id: "default", name: "Main Library", path: defaultRoot }];
-  if (fs.existsSync(LIBRARIES_FILE)) {
+  if (!process.env.STLS_ROOT && fs.existsSync(LIBRARIES_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(LIBRARIES_FILE, "utf8"));
       if (Array.isArray(data) && data.length > 0) list = data;
@@ -107,9 +107,31 @@ function hasThumb(tp) {
   }
 }
 
+function thumbKey(rel, size, mtime) {
+  // NAS/FUSE mounts can report jittery sub-ms mtimes. Seconds are stable
+  // enough for thumbnail invalidation and prevent cache misses on revisits.
+  const mtimeSeconds = Math.floor(Number(mtime || 0) / 1000);
+  return crypto.createHash("sha1").update(`${rel}:${size}:${mtimeSeconds}`).digest("hex");
+}
+
+function legacyThumbKey(rel, size, mtime) {
+  return crypto.createHash("sha1").update(`${rel}:${size}:${Math.round(mtime)}`).digest("hex");
+}
+
 function thumbPath(root, rel, size, mtime) {
-  const key = crypto.createHash("sha1").update(`${rel}:${size}:${Math.round(mtime)}`).digest("hex");
-  return path.join(root, ".thumbs", `${key}.png`);
+  return path.join(root, ".thumbs", `${thumbKey(rel, size, mtime)}.png`);
+}
+
+function legacyThumbPath(root, rel, size, mtime) {
+  return path.join(root, ".thumbs", `${legacyThumbKey(rel, size, mtime)}.png`);
+}
+
+function existingThumbPath(root, rel, size, mtime) {
+  const current = thumbPath(root, rel, size, mtime);
+  if (hasThumb(current)) return current;
+  const legacy = legacyThumbPath(root, rel, size, mtime);
+  if (hasThumb(legacy)) return legacy;
+  return current;
 }
 
 function inspect3MF(abs, tp) {
@@ -155,7 +177,7 @@ function inspect3MF(abs, tp) {
 function fileEntry(abs, root) {
   const st = fs.statSync(abs);
   const rel = path.relative(root, abs).split(path.sep).join("/");
-  const tp = thumbPath(root, rel, st.size, st.mtimeMs);
+  const tp = existingThumbPath(root, rel, st.size, st.mtimeMs);
   const ext = path.extname(abs).toLowerCase().replace(".", "");
 
   let slicerMeta = null;
@@ -273,12 +295,18 @@ app.get("/api/file", (req, res) => {
 
 app.get("/api/thumb", (req, res) => {
   const info = safeRel(req.query.path || "", req.query.lib);
-  if (!info || !fs.existsSync(info.abs)) return res.status(404).end();
+  if (!info || !fs.existsSync(info.abs)) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(404).end();
+  }
   const st = fs.statSync(info.abs);
-  const tp = thumbPath(info.root, info.rel, st.size, st.mtimeMs);
-  if (!hasThumb(tp)) return res.status(404).end();
+  const tp = existingThumbPath(info.root, info.rel, st.size, st.mtimeMs);
+  if (!hasThumb(tp)) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(404).end();
+  }
   res.setHeader("Cache-Control", "public, max-age=86400, immutable");
-  res.sendFile(tp);
+  res.sendFile(tp, { dotfiles: "allow" });
 });
 
 app.post("/api/thumb", (req, res) => {
@@ -421,8 +449,12 @@ app.post("/api/delete", (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`STL Vault listening on http://localhost:${PORT}`);
-  const libs = loadLibraries();
-  console.log(`Configured libraries: ${libs.map((l) => `${l.name} (${l.path})`).join(", ")}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`STL Vault listening on http://localhost:${PORT}`);
+    const libs = loadLibraries();
+    console.log(`Configured libraries: ${libs.map((l) => `${l.name} (${l.path})`).join(", ")}`);
+  });
+}
+
+module.exports = { app, thumbKey, legacyThumbKey, thumbPath, legacyThumbPath, existingThumbPath, inspect3MF, hasThumb };

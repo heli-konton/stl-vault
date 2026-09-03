@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "check": "node --check server/index.js && node --check --input-type=module < client/app.js && node --check --input-type=module < client/viewer3d.js",
+    "test": "node --test",
+    "seed-thumbs": "node scripts/seed-thumbs.js"
   },
   "keywords": [],
   "author": "",
