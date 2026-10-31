@@ -1,73 +1,127 @@
 # STL Vault
 
-A self-hosted STL file manager that behaves like Finder — except the icons
-are **live 3D renders** of your models. Hover a file and it pops out big
-enough to actually see it. Double-click for a full orbit viewer.
+A self-hosted STL/3MF file manager that behaves like Finder — except the icons
+are **live 3D renders** of your models. Hover a file and it pops out big enough
+to actually see it. Double-click for a full orbit viewer.
 
-Built to replace a disappointing off-the-shelf STL manager: no database, no
-accounts, no sync daemon. **The filesystem is the truth** — folders on disk
-are folders in the UI, so you can also organize with `mv` and the UI just
-follows along.
+STL Vault is filesystem-backed: folders on disk are folders in the UI. Model
+files stay in your configured library roots; app configuration and generated
+thumbnail cache live in a separate state directory.
 
 ## Features
 
-- **3D thumbnails as file icons** — rendered in-browser once, cached
-  server-side as PNGs (`.thumbs/`, keyed by path+size+mtime, so edits
-  invalidate correctly). First visit renders lazily; after that, instant.
-- **Hover pop-out** — park the cursor on a file for ~300ms and a 440px
-  auto-rotating preview floats next to it.
+- **3D thumbnails as file icons** — rendered in-browser once, cached server-side
+  as PNGs under `STL_VAULT_STATE_DIR/thumbs/`, keyed by library/path/size/mtime.
+- **Hover pop-out** — park the cursor on a file and a large auto-rotating preview
+  floats next to it.
 - **Quick-Look modal** — double-click for the big viewer: orbit, zoom, pan.
-- **Finder rules** — folder tree sidebar, breadcrumbs, drag files (or whole
-  folders) onto folders, drag onto the content background for the current
-  folder, rename, trash (moves to `.trash/`, never unlinks).
-- **OS drag-to-upload** — drop `.stl` files from Finder/Explorer anywhere in
-  the window; they land in the folder you're looking at. Upload button too.
-- **Filter box** for big folders.
+- **Finder rules** — folder tree sidebar, breadcrumbs, drag files or folders onto
+  folders, rename, trash, and cross-library moves.
+- **OS drag-to-upload** — drop `.stl` or `.3mf` files from Finder/Explorer
+  anywhere in the window.
+- **Optional token authentication** — when `STL_VAULT_TOKEN` is set, every API
+  request, model download, thumbnail read, upload, and thumbnail-save request
+  requires an authenticated session cookie. The token is submitted only in the
+  login body and is never placed in URLs.
 
-## Run it
+## Run it locally
 
 ```bash
 npm install
-STLS_ROOT=/path/to/your/stls npm start
+STLS_ROOT=/path/to/your/stls \
+STL_VAULT_STATE_DIR=/tmp/stl-vault-state \
+STL_VAULT_TOKEN='choose-a-long-random-token' \
+npm start
 # → http://localhost:4173
 ```
 
-Defaults to `./stls` if `STLS_ROOT` is unset. Sample models included; delete
-them and point it at your real library.
+If `STL_VAULT_TOKEN` is unset or empty, authentication is disabled. That is only
+appropriate for trusted local development or a tightly isolated LAN.
 
-## Deploy on the Proxmox box (LXC)
+## Configuration
 
-Copy the folder to the LXC, then:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `4173` | HTTP listen port. |
+| `STLS_ROOT` | `./stls` | Default model library root. |
+| `STL_VAULT_STATE_DIR` | `./var` or systemd `/var/lib/stl-vault` | Mutable app state: `libraries.json` and generated thumbnails. |
+| `STL_VAULT_TOKEN` | unset | Enables token login/session auth when set. Use a long random value. |
+
+`libraries.json` is stored in the state directory, not under `/opt/stl-vault`, so
+application code can be deployed read-only.
+
+## Deploy with systemd on the LXC
+
+Create a fixed service account and give it explicit write access to the model
+library root:
 
 ```bash
-cp deploy/stl-vault.service /etc/systemd/system/
-# edit WorkingDirectory / Environment=STLS_ROOT in the unit
-systemctl daemon-reload
-systemctl enable --now stl-vault
+useradd --system --home /var/lib/stl-vault --shell /usr/sbin/nologin stl-vault
+mkdir -p /opt/stl-vault /srv/models /etc/stl-vault
+chown -R stl-vault:stl-vault /srv/models
+chmod 2775 /srv/models
 ```
 
-Put `STLS_ROOT` on your bulk storage mount (the same dataset your current
-manager uses — you can run both side by side while you evaluate, they're
-just reading files). Reverse-proxy it behind your usual nginx/Traefik host
-when you're happy, then decommission the old one.
+If the model library is shared with Samba or other tools, use a shared group
+instead of making `stl-vault` the only owner:
 
-## Verified before shipping
+```bash
+usermod -aG manyfold stl-vault
+chgrp -R manyfold /srv/models
+chmod -R g+rwX /srv/models
+find /srv/models -type d -exec chmod g+s {} +
+```
 
-Headless Chromium against a live server: grid render, thumbnail generation +
-server cache, cached thumbs on reload, hover pop-out, orbit modal,
-drag-to-folder (verified on disk), sidebar navigation, breadcrumbs, mkdir,
-OS-drop upload (verified on disk), zero JS errors. Screenshots in `shots/`.
+Put secrets and local paths in `/etc/stl-vault/stl-vault.env`:
+
+```bash
+PORT=4173
+STLS_ROOT=/srv/models
+STL_VAULT_STATE_DIR=/var/lib/stl-vault
+STL_VAULT_TOKEN=replace-with-a-long-random-token
+```
+
+Install and start the unit:
+
+```bash
+cp deploy/stl-vault.service /etc/systemd/system/stl-vault.service
+systemctl daemon-reload
+systemctl enable --now stl-vault
+systemctl status stl-vault
+```
+
+The provided unit uses:
+
+- `StateDirectory=stl-vault` for `/var/lib/stl-vault` ownership/creation.
+- `ReadOnlyPaths=/opt/stl-vault` so code is read-only at runtime.
+- `ReadWritePaths=/var/lib/stl-vault /srv/models` for the state dir and model
+  library.
+- A fixed `stl-vault` user instead of `DynamicUser=yes`, because model libraries
+  need stable, documented ownership across restarts and other file-sharing tools.
+
+## Security notes
+
+- Do not expose STL Vault publicly without `STL_VAULT_TOKEN` and an HTTPS reverse
+  proxy.
+- Tokens are not accepted in query strings. Authenticate via the login form;
+  the server returns an `HttpOnly; SameSite=Lax` session cookie.
+- Symlinked folders/files are allowed only when their real path remains inside
+  the configured library root. Links resolving outside the root are hidden from
+  tree/listing APIs and cannot be served, moved, renamed, uploaded into, or
+  deleted through the app.
+
+## Tests and checks
+
+```bash
+npm test
+npm run check
+```
+
+The test suite uses temporary directories only; it does not touch real model
+libraries.
 
 ## Stack
 
 Express + multer server (`server/index.js`), dependency-free SPA client,
-Three.js (vendored, no CDN — works offline on the LAN) for STLLoader /
-rendering / OrbitControls.
-
-## Sensible next steps (not built yet)
-
-- Multiple selection + bulk move/delete
-- Slicer hand-off (open in PrusaSlicer/OrcaSlicer via URL or file assoc)
-- Print metadata (filament estimates via a slicer CLI)
-- Recursive search across folders
-- Auth, if you ever expose it beyond the LAN (don't, without it)
+Three.js (vendored, no CDN) for STLLoader / 3MFLoader / rendering /
+OrbitControls.

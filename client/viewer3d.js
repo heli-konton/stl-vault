@@ -55,7 +55,7 @@ function loadGeometry(path, libId = "") {
     geometryCache.delete(oldestKey);
   }
 
-  const promise = fetch(`/api/file?path=${encodeURIComponent(path)}&lib=${encodeURIComponent(libId)}`)
+  const promise = fetch(`/api/file?path=${encodeURIComponent(path)}&lib=${encodeURIComponent(libId)}`, { credentials: "same-origin" })
     .then((r) => {
       if (!r.ok) throw new Error(`fetch ${r.status}`);
       return r.arrayBuffer();
@@ -138,12 +138,17 @@ export async function renderThumbPng(path, libId = "") {
 }
 
 /** Ask the server to store a rendered thumbnail. */
-export function saveThumb(path, libId, png) {
-  return fetch("/api/thumb", {
+export async function saveThumb(path, libId, png) {
+  const savePromise = fetch("/api/thumb", {
     method: "POST",
+    credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path, lib: libId, png }),
-  }).catch(() => {});
+  });
+  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("thumbnail save timeout")), 6000));
+  const res = await Promise.race([savePromise, timeoutPromise]);
+  if (!res.ok) throw new Error(`thumbnail save ${res.status}`);
+  return res.json().catch(() => ({ ok: true }));
 }
 
 // -- live viewers ------------------------------------------------------------
@@ -180,14 +185,21 @@ function makeViewer(container, interactive) {
     controls.maxDistance = 8;
   }
 
-  const state = { mesh: null, autoRotate: !interactive, raf: 0, disposed: false };
+  const state = { mesh: null, material: null, autoRotate: !interactive, raf: 0, disposed: false, paused: false };
 
   function frame() {
-    if (state.disposed) return;
+    if (state.disposed || state.paused) {
+      state.raf = 0;
+      return;
+    }
     if (state.mesh && state.autoRotate) state.mesh.rotation.y += 0.008;
     if (controls) controls.update();
     renderer.render(scene, camera);
     state.raf = requestAnimationFrame(frame);
+  }
+
+  function ensureFrame() {
+    if (!state.raf && !state.disposed && !state.paused) frame();
   }
 
   return {
@@ -196,17 +208,30 @@ function makeViewer(container, interactive) {
       const geo = await loadGeometry(path, libId);
       if (state.disposed) return;
       if (state.mesh) scene.remove(state.mesh);
-      state.mesh = new THREE.Mesh(geo, studioMaterial());
+      state.material?.dispose();
+      state.material = studioMaterial();
+      state.mesh = new THREE.Mesh(geo, state.material);
       state.mesh.rotation.set(-0.35, 0.5, 0);
       scene.add(state.mesh);
       resize();
-      if (!state.raf) frame();
+      ensureFrame();
+    },
+    setPaused(paused) {
+      state.paused = !!paused;
+      if (state.paused && state.raf) {
+        cancelAnimationFrame(state.raf);
+        state.raf = 0;
+      } else if (!state.paused) {
+        ensureFrame();
+      }
     },
     dispose() {
       state.disposed = true;
       cancelAnimationFrame(state.raf);
       resizeObserver.disconnect();
       controls?.dispose();
+      if (state.mesh) scene.remove(state.mesh);
+      state.material?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     },
@@ -253,6 +278,7 @@ function showPop(cardEl, file, libId = "", token = popToken) {
   popview.style.left = `${x}px`;
   popview.style.top = `${y}px`;
   popview.classList.add("show");
+  popViewer.setPaused?.(false);
   popViewer.show(file.path, libId).catch(() => {
     if (token === popToken) hidePop();
   });
@@ -268,6 +294,7 @@ function hidePop() {
   clearTimeout(popTimer);
   clearTimeout(popHideTimer);
   popview.classList.remove("show");
+  popViewer?.setPaused?.(true);
 }
 
 window.addEventListener("scroll", hidePop, true);
@@ -305,7 +332,7 @@ export function openModalViewer(file, libId = "") {
   }
 
   modalViewer = makeViewer(modalBody, true);
-  modalViewer.show(file.path, libId);
+  modalViewer.show(file.path, libId).catch(() => closeModalViewer());
 }
 
 export function closeModalViewer() {

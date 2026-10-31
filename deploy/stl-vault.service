@@ -1,16 +1,29 @@
 [Unit]
-Description=STL Vault — self-hosted STL file manager
-After=network.target
+Description=STL Vault — self-hosted STL/3MF file manager
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=stl-vault
+Group=stl-vault
 WorkingDirectory=/opt/stl-vault
+Environment=NODE_ENV=production
 Environment=PORT=4173
-Environment=STLS_ROOT=/mnt/storage/stls
+Environment=STLS_ROOT=/srv/models
+Environment=STL_VAULT_STATE_DIR=/var/lib/stl-vault
+EnvironmentFile=-/etc/stl-vault/stl-vault.env
+StateDirectory=stl-vault
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/stl-vault /srv/models /mnt/storage/archive
+ReadOnlyPaths=/opt/stl-vault
 ExecStart=/usr/bin/node server/index.js
 Restart=always
 RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
 
 [Install]
 WantedBy=multi-user.target
