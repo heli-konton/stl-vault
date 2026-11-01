@@ -31,6 +31,9 @@ const state = {
   selectedPaths: new Set(),
   treeCollapsed: localStorage.getItem("stl_vault_tree_collapsed") === "1",
   collapsedTreePaths: loadCollapsedTreePaths(),
+  navSeq: 0,
+  navController: null,
+  treeLoadedForLib: null,
 };
 
 const contentEl = document.getElementById("content");
@@ -69,12 +72,34 @@ const thumbObserver = new IntersectionObserver(
   { root: contentEl, rootMargin: "200px 0px" }
 );
 
+async function apiFetch(url, options = {}) {
+  const res = await fetch(url, { credentials: "same-origin", ...options });
+  if (res.status === 401) {
+    showLogin("Your STL Vault session has expired. Please sign in again.");
+    throw new Error("Unauthorized");
+  }
+  return res;
+}
+
+async function readJson(res) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${res.status}`);
+  return data;
+}
+
 const api = {
-  libraries: () => fetch("/api/libraries").then((r) => r.json()),
+  session: () => apiFetch("/api/session").then(readJson),
+  login: (token) => apiFetch("/api/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  }).then(readJson),
+  libraries: (signal) => apiFetch("/api/libraries", { signal }).then(readJson),
   addLibrary: (name, path) => post("/api/libraries", { name, path }),
-  deleteLibrary: (id) => fetch(`/api/libraries/${id}`, { method: "DELETE" }).then((r) => r.json()),
-  tree: (lib) => fetch(`/api/tree?lib=${encodeURIComponent(lib)}`).then((r) => r.json()),
-  files: (lib, path) => fetch(`/api/files?path=${encodeURIComponent(path)}&lib=${encodeURIComponent(lib)}`).then((r) => r.json()),
+  deleteLibrary: (id) => apiFetch(`/api/libraries/${id}`, { method: "DELETE" }).then(readJson),
+  tree: (lib, signal) => apiFetch(`/api/tree?lib=${encodeURIComponent(lib)}`, { signal }).then(readJson),
+  files: (lib, path, signal) => apiFetch(`/api/files?path=${encodeURIComponent(path)}&lib=${encodeURIComponent(lib)}`, { signal }).then(readJson),
+  folderPreview: (lib, path, signal) => apiFetch(`/api/folder-preview?path=${encodeURIComponent(path)}&lib=${encodeURIComponent(lib)}`, { signal }).then(readJson),
   mkdir: (lib, path, name) => post("/api/mkdir", { lib, path, name }),
   move: (fromLib, fromPath, toLib, toPath) => post("/api/move", { fromLib, from: fromPath, toLib, to: toPath }),
   rename: (lib, path, name) => post("/api/rename", { lib, path, name }),
@@ -82,15 +107,42 @@ const api = {
 };
 
 function post(url, body) {
-  return fetch(url, {
+  return apiFetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-  }).then(async (r) => {
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `${r.status}`);
-    return data;
-  });
+  }).then(readJson);
+}
+
+function showLogin(message = "Sign in to STL Vault") {
+  let panel = document.getElementById("loginPanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "loginPanel";
+    panel.className = "login-panel";
+    panel.innerHTML = `
+      <form id="loginForm" class="login-box">
+        <h2>STL Vault</h2>
+        <p id="loginMessage"></p>
+        <input id="loginToken" type="password" autocomplete="current-password" placeholder="Access token" required>
+        <button class="tbtn" type="submit">Sign in</button>
+      </form>`;
+    document.body.appendChild(panel);
+    panel.querySelector("#loginForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = panel.querySelector("#loginToken");
+      try {
+        await api.login(input.value);
+        input.value = "";
+        panel.remove();
+        refresh().catch((e) => { if (e.name !== "AbortError") alert(e.message); });
+      } catch {
+        panel.querySelector("#loginMessage").textContent = "Invalid token. Please try again.";
+      }
+    });
+  }
+  panel.querySelector("#loginMessage").textContent = message;
+  panel.querySelector("#loginToken")?.focus();
 }
 
 function fmtSize(bytes) {
@@ -206,7 +258,7 @@ document.getElementById("importLinkBtn").addEventListener("click", async () => {
   try {
     const res = await post("/api/import-link", { url, lib: state.activeLib, path: state.path });
     alert(`Imported ${res.count || 0} model file(s) into folder “${res.folder}”!`);
-    refresh();
+    refresh({ forceTree: true });
   } catch (err) {
     alert(`Import failed: ${err.message}`);
   }
@@ -214,18 +266,38 @@ document.getElementById("importLinkBtn").addEventListener("click", async () => {
 
 /* ------------------------------------------------------------------ boot */
 
-async function refresh() {
-  state.libraries = await api.libraries();
+async function refresh(options = {}) {
+  state.navController?.abort();
+  state.navController = new AbortController();
+  const signal = state.navController.signal;
+  const seq = ++state.navSeq;
+  clearThumbJobs();
+  hideHoverPreview();
+
+  const forceTree = !!options.forceTree;
+  state.libraries = await api.libraries(signal);
+  if (seq !== state.navSeq) return;
+
   if (!state.libraries.some((l) => l.id === state.activeLib)) {
     state.activeLib = state.libraries[0]?.id || "default";
+    state.treeLoadedForLib = null;
   }
-  state.tree = await api.tree(state.activeLib);
+
+  if (forceTree || state.treeLoadedForLib !== state.activeLib || !state.tree) {
+    state.tree = await api.tree(state.activeLib, signal);
+    state.treeLoadedForLib = state.activeLib;
+    if (seq !== state.navSeq) return;
+  }
+
   try {
-    state.entries = await api.files(state.activeLib, state.path);
+    state.entries = await api.files(state.activeLib, state.path, signal);
   } catch (err) {
+    if (err.name === "AbortError") return;
     state.path = "";
-    state.entries = await api.files(state.activeLib, "");
+    state.entries = await api.files(state.activeLib, "", signal);
   }
+  if (seq !== state.navSeq) return;
+
   renderLibraries();
   renderTree();
   renderCrumbs();
@@ -239,7 +311,7 @@ function navigate(path) {
   hideHoverPreview();
   state.path = path;
   state.selectedPaths.clear();
-  refresh().catch((e) => alert(e.message));
+  refresh().catch((e) => { if (e.name !== "AbortError") alert(e.message); });
 }
 
 function navigateBack() {
@@ -259,7 +331,8 @@ function switchLibrary(libId) {
   state.activeLib = libId;
   state.path = "";
   state.selectedPaths.clear();
-  refresh().catch((e) => alert(e.message));
+  state.treeLoadedForLib = null;
+  refresh({ forceTree: true }).catch((e) => { if (e.name !== "AbortError") alert(e.message); });
 }
 
 function renderViewToggle() {
@@ -502,7 +575,7 @@ function cardActions(entry, isFolder) {
     const name = prompt(`Rename “${entry.name}” to:`, entry.name);
     if (!name || name === entry.name) return;
     await api.rename(state.activeLib, entry.path, name);
-    refresh();
+    refresh({ forceTree: true });
   });
 
   const del = document.createElement("button");
@@ -513,7 +586,7 @@ function cardActions(entry, isFolder) {
     e.stopPropagation();
     if (!confirm(`Move “${entry.name}” to trash?`)) return;
     await api.del(state.activeLib, entry.path);
-    refresh();
+    refresh({ forceTree: true });
   });
 
   box.append(rn, del);
@@ -745,10 +818,15 @@ function renderListView(folders, files) {
   return table;
 }
 
+function versionedThumbUrl(file, libId = state.activeLib) {
+  const version = file.mtimeVersion || `${file.size || 0}-${Math.floor((file.mtime || 0) / 1000)}`;
+  return `/api/thumb?path=${encodeURIComponent(file.path)}&lib=${encodeURIComponent(libId)}&v=${encodeURIComponent(version)}`;
+}
+
 function fillRowFolderThumbNow(host, folder) {
   if (folder.preview?.thumb) {
     const img = document.createElement("img");
-    img.src = `/api/thumb?path=${encodeURIComponent(folder.preview.path)}&lib=${encodeURIComponent(state.activeLib)}`;
+    img.src = versionedThumbUrl(folder.preview);
     img.alt = `${folder.name} preview`;
     img.onerror = () => {
       host.innerHTML = ICON.folder(15);
@@ -763,6 +841,16 @@ function fillFolderThumbNow(host, folder) {
   host.classList.toggle("folder-preview", !!folder.preview);
   if (!folder.preview) {
     host.innerHTML = `<span class="big-ico">${ICON.folder(46)}</span>`;
+    const seq = state.navSeq;
+    api.folderPreview(state.activeLib, folder.path, state.navController?.signal)
+      .then(({ preview }) => {
+        if (seq !== state.navSeq || !host.isConnected || !preview) return;
+        folder.preview = preview;
+        host.innerHTML = "";
+        host.classList.add("folder-preview");
+        fillThumbNow(host, preview);
+      })
+      .catch(() => {});
     return;
   }
   fillThumbNow(host, folder.preview);
@@ -771,7 +859,7 @@ function fillFolderThumbNow(host, folder) {
 function fillRowThumbNow(host, file) {
   if (file.thumb) {
     const img = document.createElement("img");
-    img.src = `/api/thumb?path=${encodeURIComponent(file.path)}&lib=${encodeURIComponent(state.activeLib)}`;
+    img.src = versionedThumbUrl(file);
     img.alt = file.name;
     img.onerror = () => {
       file.thumb = false;
@@ -783,27 +871,42 @@ function fillRowThumbNow(host, file) {
   host.innerHTML = ICON.file(15);
 }
 
+function renderUnavailableThumb(host) {
+  host.innerHTML = "";
+  const badge = document.createElement("div");
+  badge.className = "rendering";
+  badge.style.animation = "none";
+  badge.style.color = "var(--ink-dim)";
+  badge.innerHTML = ICON.cube(62);
+  host.appendChild(badge);
+}
+
+function tryServerThumb(host, file, fallback) {
+  const img = document.createElement("img");
+  img.src = versionedThumbUrl(file);
+  img.alt = file.name;
+  img.onload = () => { file.thumb = true; };
+  img.onerror = fallback;
+  host.appendChild(img);
+}
+
 function fillThumbNow(host, file) {
   if (file.thumb) {
-    const img = document.createElement("img");
-    img.src = `/api/thumb?path=${encodeURIComponent(file.path)}&lib=${encodeURIComponent(state.activeLib)}`;
-    img.alt = file.name;
-    img.onerror = () => {
+    tryServerThumb(host, file, () => {
       file.thumb = false;
       host.innerHTML = "";
       fillThumbNow(host, file);
-    };
-    host.appendChild(img);
+    });
+    return;
+  }
+
+  if (file.kind === "3mf") {
+    tryServerThumb(host, file, () => renderUnavailableThumb(host));
     return;
   }
 
   if (file.size && file.size > 30 * 1024 * 1024) {
-    const badge = document.createElement("div");
-    badge.className = "rendering";
-    badge.style.animation = "none";
-    badge.style.color = "var(--ink-dim)";
-    badge.innerHTML = ICON.cube(62);
-    host.appendChild(badge);
+    renderUnavailableThumb(host);
     return;
   }
 
@@ -864,7 +967,7 @@ function makeDropTarget(el, targetLibId, targetFolderPath) {
       }
     }
     state.selectedPaths.clear();
-    refresh();
+    refresh({ forceTree: true });
   });
 }
 
@@ -976,22 +1079,24 @@ async function uploadFileEntries(fileEntries) {
 
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
-    await fetch(`/api/upload?path=${encodeURIComponent(targetPath)}&lib=${encodeURIComponent(state.activeLib)}`, {
+    const res = await apiFetch(`/api/upload?path=${encodeURIComponent(targetPath)}&lib=${encodeURIComponent(state.activeLib)}`, {
       method: "POST",
       body: form,
     });
+    await readJson(res);
   }
-  refresh();
+  refresh({ forceTree: true });
 }
 
 async function uploadFiles(files) {
   const form = new FormData();
   files.forEach((f) => form.append("files", f));
-  await fetch(`/api/upload?path=${encodeURIComponent(state.path)}&lib=${encodeURIComponent(state.activeLib)}`, {
+  const res = await apiFetch(`/api/upload?path=${encodeURIComponent(state.path)}&lib=${encodeURIComponent(state.activeLib)}`, {
     method: "POST",
     body: form,
   });
-  refresh();
+  await readJson(res);
+  refresh({ forceTree: true });
 }
 
 document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("uploadInput").click());
@@ -1049,7 +1154,7 @@ function showContextMenu(x, y, entry, isFolder) {
     const name = prompt(`Rename “${entry.name}” to:`, entry.name);
     if (!name || name === entry.name) return;
     await api.rename(state.activeLib, entry.path, name);
-    refresh();
+    refresh({ forceTree: true });
   });
   ctxMenuEl.appendChild(renameItem);
 
@@ -1091,7 +1196,7 @@ function showContextMenu(x, y, entry, isFolder) {
     hideContextMenu();
     if (!confirm(`Move “${entry.name}” to trash?`)) return;
     await api.del(state.activeLib, entry.path);
-    refresh();
+    refresh({ forceTree: true });
   });
   ctxMenuEl.appendChild(delItem);
 
@@ -1108,12 +1213,19 @@ function showContextMenu(x, y, entry, isFolder) {
 
 const thumbQueue = [];
 const thumbQueued = new Set();
+const activeThumbJobs = new Set();
 let thumbActive = 0;
 const THUMB_CONCURRENCY = 2;
-const MAX_WARM_THUMBS_PER_FOLDER = 80;
+const MAX_WARM_THUMBS_PER_FOLDER = 40;
 
 function thumbKey(file, libId) {
-  return `${libId}:${file.path}`;
+  return `${libId}:${file.path}:${file.mtimeVersion || ""}`;
+}
+
+function clearThumbJobs() {
+  thumbQueue.splice(0, thumbQueue.length);
+  thumbQueued.clear();
+  for (const job of activeThumbJobs) job.cancelled = true;
 }
 
 function queueThumbRender(job) {
@@ -1122,6 +1234,7 @@ function queueThumbRender(job) {
   if (thumbQueued.has(key)) return;
   thumbQueued.add(key);
   job.key = key;
+  job.seq = state.navSeq;
   if (job.urgent) thumbQueue.unshift(job);
   else thumbQueue.push(job);
   pumpThumbQueue();
@@ -1138,11 +1251,17 @@ function warmCurrentFolderThumbs(folders, files) {
   });
 }
 
-async function pumpThumbQueue() {
+function pumpThumbQueue() {
   while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length) {
     const job = thumbQueue.shift();
+    if (job.cancelled || job.seq !== state.navSeq) {
+      thumbQueued.delete(job.key);
+      continue;
+    }
     thumbActive += 1;
+    activeThumbJobs.add(job);
     runThumbJob(job).finally(() => {
+      activeThumbJobs.delete(job);
       thumbActive -= 1;
       pumpThumbQueue();
     });
@@ -1150,15 +1269,18 @@ async function pumpThumbQueue() {
 }
 
 async function runThumbJob(job) {
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout")), 9000)
-  );
+  let timeoutId = 0;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Timeout")), 9000);
+  });
 
   try {
     const png = await Promise.race([renderThumbPng(job.file.path, job.libId), timeoutPromise]);
-    saveThumb(job.file.path, job.libId, png);
+    if (job.cancelled || job.seq !== state.navSeq) return;
+    await saveThumb(job.file.path, job.libId, png);
+    job.file.thumb = true;
 
-    if (job.host?.isConnected) {
+    if (job.host?.isConnected && job.seq === state.navSeq) {
       const img = document.createElement("img");
       img.src = png;
       img.alt = job.file.name;
@@ -1169,12 +1291,13 @@ async function runThumbJob(job) {
       job.host.appendChild(img);
     }
   } catch {
-    if (job.shimmer?.isConnected) {
+    if (!job.cancelled && job.seq === state.navSeq && job.shimmer?.isConnected) {
       job.shimmer.style.animation = "none";
       job.shimmer.style.color = "var(--ink-faint)";
       job.shimmer.innerHTML = ICON.cube(62);
     }
   } finally {
+    clearTimeout(timeoutId);
     thumbQueued.delete(job.key);
   }
 }
@@ -1186,7 +1309,7 @@ document.getElementById("newFolderBtn").addEventListener("click", async () => {
   if (!name) return;
   try {
     await api.mkdir(state.activeLib, state.path, name);
-    refresh();
+    refresh({ forceTree: true });
   } catch (e) {
     alert(e.message);
   }
@@ -1197,4 +1320,9 @@ document.getElementById("search").addEventListener("input", (e) => {
   renderContent();
 });
 
-refresh().catch((e) => alert(e.message));
+api.session()
+  .then((session) => {
+    if (session.authEnabled && !session.authenticated) showLogin();
+    else refresh().catch((e) => { if (e.name !== "AbortError") alert(e.message); });
+  })
+  .catch((e) => alert(e.message));

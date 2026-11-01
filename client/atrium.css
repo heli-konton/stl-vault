@@ -453,3 +453,23 @@ button,select{font-family:inherit;color:inherit;background:none;border:0;cursor:
   border:1.5px dashed var(--accent-line);background:rgba(var(--accent-rgb),.07);
   font-family:var(--sans);font-size:15px;letter-spacing:0;text-transform:none;color:#e2e4ff;
 }
+
+
+/* ---------- authentication ---------- */
+.login-panel{
+  position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;
+  padding:24px;background:rgba(6,8,14,.74);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+.login-box{
+  width:min(360px,92vw);display:flex;flex-direction:column;gap:14px;
+  padding:24px;border:1px solid var(--hairline-2);border-radius:var(--r-xl);
+  background:rgba(20,23,34,.88);box-shadow:0 40px 90px rgba(0,0,0,.65);
+}
+.login-box h2{margin:0;color:var(--ink);font-size:20px;font-weight:600}
+.login-box p{margin:0;color:var(--ink-faint);font-size:13px;line-height:1.5}
+.login-box input{
+  height:42px;padding:0 13px;border-radius:var(--r-md);border:1px solid var(--hairline-2);
+  color:var(--ink);background:rgba(255,255,255,.06);outline:none;
+}
+.login-box input:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+.login-box button{justify-content:center;height:38px}
